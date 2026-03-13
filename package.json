@@ -1,0 +1,24 @@
+{
+  "name": "goofish-lister",
+  "version": "1.0.0",
+  "description": "闲鱼商品全自动上架助手：支持精准图文采集、图片美化、文案重写及自动填表发布。",
+  "main": "index.js",
+  "scripts": {
+    "login": "node scripts/login_once.js",
+    "extract": "node scripts/extract_listing_assets.js",
+    "draft": "node scripts/generate_draft.js",
+    "publish": "node scripts/fill_publish_form.js"
+  },
+  "keywords": [
+    "goofish",
+    "lister",
+    "automation",
+    "playwright"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "sharp": "^0.32.0"
+  }
+}

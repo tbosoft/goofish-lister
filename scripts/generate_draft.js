@@ -1,0 +1,272 @@
+#!/usr/bin/env node
+/**
+ * Generate a listing draft (offline) from extract_listing_assets output.
+ *
+ * No external model calls. No browser automation.
+ *
+ * Usage:
+ *   node skills/goofish-lister/scripts/generate_draft.js --in outputs/listing-assets-xxx.json --category "电子资料"
+ */
+
+const fs = require('fs/promises');
+const path = require('path');
+const { buildMeta } = require('./lib/output_meta');
+
+function arg(name, def = null) {
+  const idx = process.argv.indexOf(name);
+  if (idx === -1) return def;
+  const v = process.argv[idx + 1];
+  return v ?? def;
+}
+
+function parseMaybeNumber(v) {
+  if (v == null) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function roundPrice(price, roundMode) {
+  if (!Number.isFinite(price)) return null;
+  if (roundMode === 'yuan') return Math.round(price);
+  if (roundMode === 'jiao') return Math.round(price * 10) / 10;
+  // default: fen
+  return Math.round(price * 100) / 100;
+}
+
+function cleanTitle(title) {
+  if (!title) return '';
+  let t = String(title).trim();
+  // Common suffixes
+  t = t.replace(/[_\-\|\s]*闲鱼\s*$/u, '');
+  t = t.replace(/[_\-\|\s]*_?闲鱼\s*$/u, '');
+  t = t.replace(/\s*\(.*?闲鱼\)?\s*$/u, '');
+  // Trim trailing separators
+  t = t.replace(/[\s_\-|]+$/g, '').trim();
+  return t;
+}
+
+function extractOriginalPrice(bodyText) {
+  const text = String(bodyText || '');
+
+  // Pattern 1: "¥ 8.00" (can appear broken into lines; tolerate whitespace/newlines)
+  // We'll just match within the full text.
+  const yen = text.match(/¥\s*([0-9]+(?:\.[0-9]+)?)/);
+  const yenPrice = yen ? parseMaybeNumber(yen[1]) : null;
+
+  // Pattern 2: "直接买 ￥9.90"
+  const direct = text.match(/直接买\s*￥\s*([0-9]+(?:\.[0-9]+)?)/);
+  const directPrice = direct ? parseMaybeNumber(direct[1]) : null;
+
+  // Prefer ¥ main price if present; otherwise fall back.
+  if (yenPrice != null) return { price: yenPrice, source: 'yen' };
+  if (directPrice != null) return { price: directPrice, source: 'directBuy' };
+
+  return { price: null, source: null };
+}
+
+function normalizeLines(bodyText) {
+  return String(bodyText || '')
+    .split(/\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+function stripEmojiTokens(s) {
+  // Remove bracket-style emoji tokens like [闪亮][流泪]
+  return String(s).replace(/\[[^\]]{1,12}\]/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+function takeCoreSectionLines(bodyText, listingTitle) {
+  const lines = normalizeLines(bodyText);
+  const t = cleanTitle(listingTitle);
+
+  // Start near the title line if possible.
+  let start = 0;
+  if (t) {
+    const idx = lines.findIndex((l) => l.includes(t) || t.includes(l));
+    if (idx !== -1) start = idx;
+  }
+
+  // End before recommendations/footer.
+  let end = lines.length;
+  const endMarkers = ['为你推荐', '发闲置', '消息', '商品码', '客服', '回顶部', '© Goofish.com', '闲鱼社区'];
+  for (let i = start; i < lines.length; i++) {
+    if (endMarkers.some((m) => lines[i].includes(m))) {
+      end = i;
+      break;
+    }
+  }
+
+  // Slice and remove obvious UI actions.
+  const uiNoise = ['展开', '聊一聊', '立即购买', '收藏', '举报', '担保交易', '搜索', '网页版'];
+  const core = lines
+    .slice(start, end)
+    .map(stripEmojiTokens)
+    .map((l) => l.replace(/^#\s*/g, ''))
+    .filter((l) => l && !uiNoise.some((m) => l === m));
+
+  // Drop leading metrics lines if present (want/view/price snippets).
+  while (core.length && (/^(\d+\s*人想要|\d+\s*浏览|¥\s*$|[0-9]+(?:\.[0-9]+)?$|包邮|小刀价)$/u.test(core[0]) || core[0].length <= 2)) {
+    core.shift();
+  }
+
+  return core;
+}
+
+function buildStructuredDescription(coreLines) {
+  // Heuristic splitting into three sections.
+  const intro = [];
+  const trade = [];
+  const notes = [];
+
+  // Markers
+  const noteMarkers = ['买前须知', '免责声明', '概不退款', '不退款', '拍下视为', '仅供学习', '版权'];
+  const tradeMarkers = ['包邮', '同城', '自提', '发货', '网盘', '链接', '下单', '拍', '担保交易'];
+
+  let mode = 'intro';
+  for (const raw of coreLines) {
+    const l = raw.trim();
+    if (!l) continue;
+
+    if (noteMarkers.some((m) => l.includes(m))) mode = 'notes';
+
+    if (mode !== 'notes' && tradeMarkers.some((m) => l.includes(m))) {
+      // keep intro too, but push trade-related lines into trade bucket.
+      trade.push(l);
+      continue;
+    }
+
+    if (mode === 'notes') notes.push(l);
+    else intro.push(l);
+  }
+
+  // De-dup within each section while preserving order.
+  function uniqKeep(arr) {
+    const seen = new Set();
+    const out = [];
+    for (const x of arr) {
+      const k = x;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(x);
+    }
+    return out;
+  }
+
+  const introU = uniqKeep(intro).slice(0, 25);
+  const tradeU = uniqKeep(trade).slice(0, 12);
+  const notesU = uniqKeep(notes).slice(0, 20);
+
+  const parts = [];
+  parts.push('【商品介绍】');
+  parts.push(...(introU.length ? introU : ['（请补充：来源/成色/包含内容/交易方式）']));
+  parts.push('');
+  parts.push('【交易方式】');
+  parts.push(...(tradeU.length ? tradeU : ['支持闲鱼担保交易；具体交付方式见说明。']));
+  parts.push('');
+  parts.push('【注意事项】');
+  parts.push(...(notesU.length ? notesU : ['请在下单前确认信息，如有问题先聊一聊沟通。']));
+
+  // Final cleanup: remove ultra-long footer-like lines.
+  return parts
+    .map((l) => l.replace(/\s{2,}/g, ' ').trim())
+    .filter((l) => l.length <= 300)
+    .join('\n');
+}
+
+async function listJpgFiles(dir) {
+  const names = await fs.readdir(dir);
+  return names
+    .filter((n) => n.toLowerCase().endsWith('.jpg') || n.toLowerCase().endsWith('.jpeg'))
+    .sort((a, b) => a.localeCompare(b))
+    .map((n) => path.join(dir, n));
+}
+
+(async () => {
+  const inPath = arg('--in');
+  const outArg = arg('--out');
+
+  const category = arg('--category', '') || '电子资料';
+  const priceStrategy = arg('--price-strategy', 'minus2pct');
+  const roundMode = arg('--round', 'fen');
+
+  if (!inPath) {
+    console.error('Missing --in <listing-assets.json>');
+    process.exit(2);
+  }
+
+  const raw = JSON.parse(await fs.readFile(inPath, 'utf8'));
+
+  const { price: originalPrice, source: originalPriceSource } = extractOriginalPrice(raw.bodyText || '');
+  let price = null;
+  if (originalPrice != null && priceStrategy === 'minus2pct') {
+    price = roundPrice(originalPrice * 0.98, roundMode);
+  } else if (originalPrice != null) {
+    // Unknown strategy: keep original.
+    price = roundPrice(originalPrice, roundMode);
+  }
+
+  const title = cleanTitle(raw.title || '');
+  const coreLines = takeCoreSectionLines(raw.bodyText || '', raw.title || '');
+  const description = buildStructuredDescription(coreLines);
+
+  // Images selection:
+  // - Prefer processedDir JPEGs
+  // - Fallback to downloaded localPath
+  let images = [];
+  if (raw.processedDir) {
+    try {
+      images = await listJpgFiles(raw.processedDir);
+    } catch {
+      images = [];
+    }
+  }
+  if (!images.length) {
+    images = (raw.images || [])
+      .map((im) => im?.localPath)
+      .filter(Boolean);
+  }
+
+  const outDir = path.join(process.cwd(), 'outputs');
+  await fs.mkdir(outDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const outPath = outArg || path.join(outDir, `draft-${stamp}.json`);
+
+  const out = {
+    title,
+    description,
+    price,
+    category: category || null,
+    images,
+    sourceUrl: raw.url || null,
+    generatedAt: new Date().toISOString(),
+    meta: buildMeta({
+      script: 'skills/goofish-lister/scripts/generate_draft.js',
+      inputs: {
+        in: inPath,
+        out: outArg || null,
+        category: category || null,
+        priceStrategy,
+        round: roundMode,
+        originalPrice,
+        originalPriceSource,
+        usedProcessedDir: Boolean(raw.processedDir),
+      },
+      counts: {
+        images: images.length,
+      },
+    }),
+  };
+
+  await fs.writeFile(outPath, JSON.stringify(out, null, 2), 'utf8');
+  console.log(outPath);
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
