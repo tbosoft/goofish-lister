@@ -164,7 +164,6 @@ function buildStructuredDescription(coreLines) {
   const notesU = uniqKeep(notes).slice(0, 20);
 
   const parts = [];
-  parts.push('【商品介绍】');
   parts.push(...(introU.length ? introU : ['（请补充：来源/成色/包含内容/交易方式）']));
   parts.push('');
   parts.push('【交易方式】');
