@@ -78,8 +78,27 @@ function normalizeLines(bodyText) {
 }
 
 function stripEmojiTokens(s) {
-  // Remove bracket-style emoji tokens like [闪亮][流泪]
-  return String(s).replace(/\[[^\]]{1,12}\]/g, '').replace(/\s{2,}/g, ' ').trim();
+  // Remove emoji and bracket-style emoji tokens like [闪亮][流泪]
+  let out = String(s || '');
+
+  // Bracket tokens
+  out = out.replace(/\[[^\]]{1,12}\]/g, '');
+
+  // Emoji joiners / variation selectors
+  out = out.replace(/[\u200D\uFE0F]/g, '');
+
+  // Trailing artifacts sometimes appear as a lone digit appended after punctuation, e.g. "同学！6"
+  out = out.replace(/([!！。\.])\s*\d{1,2}\s*$/u, '$1');
+
+  // Unicode emoji (best-effort)
+  try {
+    out = out.replace(/\p{Extended_Pictographic}/gu, '');
+  } catch {
+    // Fallback ranges cover most emojis + dingbats (e.g. ✅)
+    out = out.replace(/[\u{1F000}-\u{1FAFF}]/gu, '').replace(/[\u{2600}-\u{27BF}]/gu, '');
+  }
+
+  return out.replace(/\s{2,}/g, ' ').trim();
 }
 
 function takeCoreSectionLines(bodyText, listingTitle) {
@@ -109,7 +128,9 @@ function takeCoreSectionLines(bodyText, listingTitle) {
     .slice(start, end)
     .map(stripEmojiTokens)
     .map((l) => l.replace(/^#\s*/g, ''))
-    .filter((l) => l && !uiNoise.some((m) => l === m));
+    .filter((l) => l && !uiNoise.some((m) => l === m))
+    // Drop stray footer/page artifacts like single-digit lines (e.g. "6")
+    .filter((l) => !/^\d{1,2}$/.test(l));
 
   // Drop leading metrics lines if present (want/view/price snippets).
   while (core.length && (/^(\d+\s*人想要|\d+\s*浏览|¥\s*$|[0-9]+(?:\.[0-9]+)?$|包邮|小刀价)$/u.test(core[0]) || core[0].length <= 2)) {
@@ -211,7 +232,7 @@ async function listJpgFiles(dir) {
     price = roundPrice(originalPrice, roundMode);
   }
 
-  const title = cleanTitle(raw.title || '');
+  const title = stripEmojiTokens(cleanTitle(raw.title || ''));
   const coreLines = takeCoreSectionLines(raw.bodyText || '', raw.title || '');
   const description = buildStructuredDescription(coreLines);
 

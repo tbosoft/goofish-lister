@@ -13,6 +13,17 @@ const path = require('path');
 const os = require('os');
 const { chromium } = require('playwright');
 
+function stripEmojiForGoofish(s) {
+  let out = String(s || '');
+  out = out.replace(/[\u200D\uFE0F]/g, '');
+  try {
+    out = out.replace(/\p{Extended_Pictographic}/gu, '');
+  } catch {
+    out = out.replace(/[\u{1F000}-\u{1FAFF}]/gu, '').replace(/[\u{2600}-\u{27BF}]/gu, '');
+  }
+  return out;
+}
+
 function arg(name, def = null) {
   const idx = process.argv.indexOf(name);
   if (idx === -1) return def;
@@ -37,6 +48,8 @@ function fmtAction(label, obj) {
   const previewPathArg = arg('--preview-path');
   const hold = hasFlag('--hold');
   const holdMinutes = parseFloat(arg('--hold-minutes', '30'));
+  const noPublish = hasFlag('--no-publish');
+  const forceCategory = hasFlag('--force-category');
 
   if (!draftPath) {
     console.error('Missing --draft <draft.json>');
@@ -44,10 +57,11 @@ function fmtAction(label, obj) {
   }
 
   const draft = JSON.parse(await fs.readFile(draftPath, 'utf8'));
-  const title = String(draft.title || '').trim();
-  const description = String(draft.description || '').trim();
+  const title = stripEmojiForGoofish(String(draft.title || '').trim());
+  const description = stripEmojiForGoofish(String(draft.description || '').trim());
   const price = draft.price;
-  const category = draft.category || '电子资料';
+  const draftCategory = String(draft.category || '').trim();
+  const category = draftCategory || '笔记资料';
   const images = Array.isArray(draft.images) ? draft.images : [];
 
   const plan = [
@@ -260,17 +274,191 @@ function fmtAction(label, obj) {
   }
 
   // Utility: pick a visible element from locators
-  async function pickVisible(locator) {
-    const n = await locator.count();
-    for (let i = 0; i < n; i++) {
-      const el = locator.nth(i);
+  async function pickVisible(...locators) {
+    for (const locator of locators) {
+      if (!locator) continue;
+      let n = 0;
       try {
-        if (await el.isVisible()) return el;
+        n = await locator.count();
+      } catch {
+        n = 0;
+      }
+      for (let i = 0; i < n; i++) {
+        const el = locator.nth(i);
+        try {
+          if (await el.isVisible()) return el;
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return null;
+  }
+
+  function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  async function getPublishButton() {
+    const publishBtnSelector = '.publish-button--KBpTVopQ';
+    return await pickVisible(
+      page.locator(publishBtnSelector),
+      page.getByRole('button', { name: /发布|提交/u })
+    );
+  }
+
+  async function isButtonDisabled(btn) {
+    if (!btn) return true;
+    try {
+      return await btn.evaluate((el) => {
+        const ariaDisabled = el.getAttribute && el.getAttribute('aria-disabled') === 'true';
+        const disabledProp = 'disabled' in el ? Boolean(el.disabled) : false;
+        const classDisabled =
+          (el.classList && (el.classList.contains('ant-btn-loading') || el.classList.contains('ant-btn-disabled'))) ||
+          false;
+        return ariaDisabled || disabledProp || classDisabled;
+      });
+    } catch {
+      return true;
+    }
+  }
+
+  async function bodyHasAppOnlyHint() {
+    try {
+      const t = await page.evaluate(() => document.body?.innerText || '');
+      return /请用\s*APP\s*发布|去\s*APP\s*发布|仅支持\s*APP\s*发布|只支持\s*APP\s*发布/u.test(t);
+    } catch {
+      return false;
+    }
+  }
+
+  async function openCategoryPicker() {
+    const opened =
+      (await clickFirst([
+        page.getByRole('button', { name: /分类|类目|属性/u }),
+        page.getByText(/分类|类目|属性规格/u).first(),
+      ])) ||
+      (await clickFirst([
+        page.getByText(/属性规格/u).first(),
+        page.locator('.ant-form-item').filter({ hasText: /属性规格/u }).first(),
+      ]));
+
+    if (!opened) return null;
+
+    await page.waitForTimeout(800);
+
+    const overlay = await pickVisible(
+      page.locator('.ant-cascader-dropdown'),
+      page.locator('.ant-select-dropdown'),
+      page.locator('.ant-popover'),
+      page.locator('.ant-dropdown'),
+      page.locator('.ant-modal'),
+      page.locator('.ant-drawer')
+    );
+
+    return overlay;
+  }
+
+  async function selectCategoryInPicker(name) {
+    const categoryName = String(name || '').trim();
+    if (!categoryName) return false;
+
+    const overlay = await openCategoryPicker();
+    const root = overlay || page;
+
+    // Try to use the picker search box if present.
+    const searchInput = await pickVisible(
+      root.getByPlaceholder(/搜索|输入/u),
+      root.getByLabel(/搜索/u),
+      root.locator('input[type="search"]')
+    );
+    if (searchInput) {
+      try {
+        await searchInput.click({ timeout: 2000 });
+        await searchInput.fill(categoryName);
+        await page.waitForTimeout(600);
       } catch {
         // ignore
       }
     }
-    return null;
+
+    const partial = categoryName.length > 4 ? categoryName.slice(0, 4) : categoryName;
+    const re = new RegExp(escapeRegExp(partial));
+
+    const picked = await clickFirst([
+      root.getByRole('option', { name: re }),
+      root.locator('.ant-cascader-menu-item').filter({ hasText: re }).first(),
+      root.locator('.ant-select-item-option').filter({ hasText: re }).first(),
+      root.locator('.ant-select-item-option-content').filter({ hasText: re }).first(),
+      root.getByText(re).first(),
+    ]);
+
+    if (!picked) return false;
+
+    // Some pickers require explicit confirmation.
+    await clickFirst([
+      root.getByRole('button', { name: /确定|完成|确认/u }),
+      page.getByRole('button', { name: /确定|完成|确认/u }),
+    ]);
+
+    await page.waitForTimeout(800);
+    return true;
+  }
+
+  async function ensurePublishableCategory() {
+    const btn = await getPublishButton();
+    if (!btn) return;
+
+    const disabledBefore = await isButtonDisabled(btn);
+    if (!disabledBefore) return;
+
+    // Give upload/async validation a chance first.
+    await page.waitForTimeout(1500);
+
+    const disabledAgain = await isButtonDisabled(btn);
+    if (!disabledAgain) return;
+
+    const appOnly = await bodyHasAppOnlyHint();
+    if (!appOnly) return;
+
+    console.log('检测到“请用APP发布”，尝试自动切换到可网页发布的类目...');
+
+    const candidates = [];
+    // Prefer a known web-friendly fallback first.
+    candidates.push('笔记资料');
+    // Then try draft category if it differs and is not the common blocked one.
+    if (draftCategory && draftCategory !== '电子资料' && draftCategory !== '笔记资料') {
+      candidates.push(draftCategory);
+    }
+    // Additional fallbacks.
+    candidates.push('二手图书');
+    candidates.push('图书');
+
+    const tried = new Set();
+    for (const c of candidates) {
+      const cc = String(c || '').trim();
+      if (!cc || tried.has(cc)) continue;
+      tried.add(cc);
+
+      console.log(`尝试选择类目: ${cc}`);
+      const ok = await selectCategoryInPicker(cc);
+      if (!ok) continue;
+
+      await page.waitForTimeout(1200);
+
+      const btnNow = await getPublishButton();
+      if (!btnNow) continue;
+
+      const disabledNow = await isButtonDisabled(btnNow);
+      const stillAppOnly = await bodyHasAppOnlyHint();
+
+      if (!disabledNow && !stillAppOnly) {
+        console.log(`类目已切换为可发布: ${cc}`);
+        return;
+      }
+    }
+
+    console.log('WARN: 未能自动找到可网页发布的类目（发布按钮仍不可用）。');
   }
 
   // 1) Title
@@ -327,78 +515,266 @@ function fmtAction(label, obj) {
   if (!descOk) console.log('WARN: failed to fill description.', descErr ? `reason=${descErr}` : '');
 
   // 3) Price
-  // Priority: input[type=number] -> placeholder includes 价格/售价 -> AntD form item label
+  // Price fields are often duplicated (e.g., 价格 + 原价). Avoid blindly filling the first numeric input.
   let priceErr = null;
   let priceOk = false;
-  try {
-    if (price != null) {
-      priceOk =
-        (await fillFirst([page.locator('input[type="number"]')], price)) ||
-        (await fillFirst([page.getByPlaceholder(/价格|售价|￥/u)], price)) ||
-        (await fillAntdFormItem(/价格|售价|标价/u, price));
 
-      if (!priceOk) {
-        // Observed on publish page: price input is type=text with placeholder 0.00
-        const priceInput = page.locator('input[placeholder="0.00"]');
-        const el = await pickVisible(priceInput);
-        if (el) {
-          await el.click({ timeout: 2000 });
-          await el.fill(String(price));
-          priceOk = true;
+  async function fillPriceByHeuristic(value) {
+    const v = String(value);
+
+    async function fillInputRobust(inputLoc) {
+      const el = await pickVisible(inputLoc);
+      if (!el) return false;
+
+      const nv = Number(v.replace(/,/g, ''));
+
+      async function okNow() {
+        try {
+          const cur = await el.inputValue();
+          if (!cur) return false;
+          const ncur = Number(String(cur).replace(/,/g, ''));
+          if (Number.isFinite(nv) && Number.isFinite(ncur)) return Math.abs(ncur - nv) < 0.001;
+          return String(cur).replace(/,/g, '') === v.replace(/,/g, '');
+        } catch {
+          return false;
         }
       }
+
+      try {
+        await el.scrollIntoViewIfNeeded().catch(() => {});
+      } catch {
+        // ignore
+      }
+
+      // Helper: blur the input without Tab (Tab jumps to 原价 field).
+      async function blurInput() {
+        await page.keyboard.press('Escape').catch(() => {});
+        await el.evaluate((node) => node.blur()).catch(() => {});
+      }
+
+      // Strategy 1: Playwright fill.
+      try {
+        await el.click({ timeout: 2000 });
+        await el.fill('');
+        await el.fill(v);
+        await blurInput();
+        await page.waitForTimeout(150);
+        if (await okNow()) return true;
+      } catch {
+        // ignore
+      }
+
+      // Strategy 2: real keyboard typing (slower delay for React InputNumber).
+      try {
+        await el.click({ timeout: 2000 });
+        await page.keyboard.press('Meta+A');
+        await page.keyboard.press('Backspace');
+        await page.waitForTimeout(50);
+        await page.keyboard.type(v, { delay: 35 });
+        await blurInput();
+        await page.waitForTimeout(200);
+        if (await okNow()) return true;
+      } catch {
+        // ignore
+      }
+
+      // Strategy 3: native value setter (bypasses React's value property interception).
+      try {
+        await el.evaluate((node, val) => {
+          const input = node;
+          input.focus();
+          const nativeSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+          ).set;
+          nativeSetter.call(input, '');
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          nativeSetter.call(input, String(val));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.blur();
+        }, v);
+        await page.waitForTimeout(200);
+        if (await okNow()) return true;
+      } catch {
+        // ignore
+      }
+
+      // Strategy 4: React fiber – directly invoke the component's onChange handler.
+      try {
+        const changed = await el.evaluate((node, val) => {
+          const input = node;
+          input.focus();
+          // Walk up the React fiber tree to find onChange.
+          const fiberKey = Object.keys(input).find(
+            (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+          );
+          if (!fiberKey) return false;
+          let fiber = input[fiberKey];
+          for (let i = 0; i < 20 && fiber; i++) {
+            const props = fiber.memoizedProps || fiber.pendingProps;
+            if (props && typeof props.onChange === 'function') {
+              props.onChange(Number(val));
+              return true;
+            }
+            fiber = fiber.return;
+          }
+          return false;
+        }, v);
+        if (changed) {
+          await page.waitForTimeout(200);
+          // Also set display value via native setter so it shows correctly.
+          await el.evaluate((node, val) => {
+            try {
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+              ).set;
+              nativeSetter.call(node, String(val));
+              node.dispatchEvent(new Event('input', { bubbles: true }));
+            } catch { /* ignore */ }
+          }, v).catch(() => {});
+          if (await okNow()) return true;
+          // Even if okNow fails, the React state may have been set correctly.
+          // Trust the fiber approach if it returned true.
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+
+      return false;
+    }
+
+    // 0) Exact selector from DOM: locate the AntD form item for “价格” and fill its input.
+    // NOTE: the input itself may have no id, even if the label has a `for`.
+    const exactByFor = page
+      .locator('.ant-form-item')
+      .filter({ has: page.locator('label[for=”itemPriceDTO_priceInCent”]') })
+      .locator('input');
+    if (await fillInputRobust(exactByFor)) return true;
+
+    const exactByTitle = page
+      .locator('.ant-form-item')
+      .filter({ has: page.locator('.ant-form-item-label label[title=”价格”]') })
+      .locator('input');
+    if (await fillInputRobust(exactByTitle)) return true;
+
+    // 0b) Ant Design InputNumber within a “价格” form item (common pattern).
+    const exactInputNumber = page
+      .locator('.ant-form-item')
+      .filter({ hasText: /价格/u })
+      .locator('.ant-input-number-input');
+    if (await fillInputRobust(exactInputNumber)) return true;
+
+    const exactByLabelText = page
+      .locator('.ant-form-item')
+      .filter({ has: page.locator('.ant-form-item-label').filter({ hasText: /^\s*价格\s*$/u }) })
+      .locator('input');
+    if (await fillInputRobust(exactByLabelText)) return true;
+
+    // 1) Common accessible labels/placeholders.
+    if (await fillInputRobust(page.getByLabel(/价格|售价|标价/u))) return true;
+    if (await fillInputRobust(page.getByPlaceholder(/价格|售价|￥/u))) return true;
+    // Avoid old helper that may type into wrong focused editor on this page.
+
+    // 2) Heuristic: pick the best visible input whose surrounding text contains “价格” but not “原价”.
+    const best = await page.locator('input').evaluateAll((els) => {
+      function visible(el) {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }
+
+      function ctxText(el) {
+        const byForm = el.closest('.ant-form-item');
+        if (byForm && byForm.innerText) return byForm.innerText;
+
+        let node = el;
+        for (let i = 0; i < 8 && node; i++) {
+          if (node.innerText) return node.innerText;
+          node = node.parentElement;
+        }
+        return '';
+      }
+
+      const scored = [];
+      for (let i = 0; i < els.length; i++) {
+        const el = els[i];
+        if (!visible(el)) continue;
+        const placeholder = el.getAttribute('placeholder') || '';
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        const type = el.getAttribute('type') || '';
+        const inputMode = el.getAttribute('inputmode') || '';
+        const id = el.getAttribute('id') || '';
+        const ctx = (ctxText(el) || '').replace(/\s+/g, '');
+
+        const cls = el.getAttribute('class') || '';
+
+        let score = 0;
+        if (id === 'itemPriceDTO_priceInCent') score += 500;
+        if (/price/i.test(id)) score += 80;
+        if (/ant-input-number-input/.test(cls) && /价格/.test(ctx)) score += 100;
+        if (/价格/.test(ctx)) score += 60;
+        if (/原价/.test(ctx)) score -= 200;
+        if (/价格/.test(ariaLabel)) score += 30;
+        if (/0\.00/.test(placeholder)) score += 10;
+        if (type === 'number') score += 5;
+        if (/decimal|numeric/.test(inputMode)) score += 5;
+        if (el.disabled) score -= 200;
+
+        scored.push({ idx: i, score });
+      }
+
+      scored.sort((a, b) => b.score - a.score);
+      return scored[0] || null;
+    });
+
+    if (!best || best.score < 20) return false;
+
+    const input = page.locator('input').nth(best.idx);
+    return await fillInputRobust(input);
+  }
+
+  try {
+    if (price != null) {
+      priceOk = await fillPriceByHeuristic(price);
+      if (!priceOk) console.log('WARN: failed to fill price (no suitable input matched).');
     } else {
       console.log('WARN: draft.price is null; skipping price fill.');
     }
   } catch (e) {
     priceErr = String(e?.message || e);
   }
+
   if (price != null && !priceOk) console.log('WARN: failed to fill price.', priceErr ? `reason=${priceErr}` : '');
 
-  // 4) Category
-  // Strategy: click 分类/类目 entry -> search in modal -> click matching item.
-  let catErr = null;
-  let catOpened = false;
+  // Click away from the price area to dismiss focus (prevents getting stuck on 原价 field).
   try {
-    // Publish page seems to have "属性规格" section for category/attributes.
-    // Click a nearby entry point if present.
-    catOpened = await clickFirst([
-      page.getByRole('button', { name: /分类|类目|属性/u }),
-      page.getByText(/分类|类目|属性规格/u).first(),
-    ]);
+    await page.locator('body').click({ position: { x: 10, y: 10 }, timeout: 1000 }).catch(() => {});
+    await page.waitForTimeout(300);
+  } catch {
+    // ignore
+  }
 
-    if (!catOpened) {
-      // Click the section text itself (often opens attribute/category picker).
-      catOpened = await clickFirst([
-        page.getByText(/属性规格/u).first(),
-        page.locator('.ant-form-item').filter({ hasText: /属性规格/u }).first(),
-      ]);
+  // 4) Category
+  // Strategy:
+  // - 默认不强制改类目（因为页面会根据文案自动出现一个“可发布”的类目）
+  // - 仅当你传了 --force-category 时，先尝试按 draft.category/默认值选择
+  // - 若检测到“请用APP发布”导致发布按钮置灰，则自动尝试切换到可网页发布类目
+  let catErr = null;
+  try {
+    if (forceCategory) {
+      const desired = category;
+      if (desired) {
+        const ok = await selectCategoryInPicker(desired);
+        if (!ok) console.log('WARN: failed to force select desired category.');
+      }
     }
 
-    if (catOpened) {
-      await page.waitForTimeout(1000);
-      const searchOk = await fillFirst(
-        [
-          page.getByPlaceholder(/搜索|输入/u),
-          page.getByLabel(/搜索/u),
-          page.locator('input[type="search"]'),
-          page.locator('input').first(),
-        ],
-        category
-      );
-      if (searchOk) await page.waitForTimeout(800);
-
-      // Additional robust click on "category name" popup selectors that might not be actual `<option>`s
-      const partialCat = category.substring(0, 4); // Just match the first few characters to avoid exact string mismatches if goofish categories are long nested paths
-      const picked = await clickFirst([
-        page.getByRole('option', { name: new RegExp(partialCat) }),
-        page.locator('.ant-cascader-menu-item').filter({ hasText: new RegExp(partialCat) }).first(),
-        page.getByText(new RegExp(partialCat)).locator('visible=true').first(),
-      ]);
-      if (!picked) console.log('WARN: category picker opened but failed to select desired category.');
-    } else {
-      console.log('WARN: failed to open category/attributes selector; skipping category.');
-    }
+    // Always try to resolve app-only category blocks.
+    await ensurePublishableCategory();
   } catch (e) {
     catErr = String(e?.message || e);
     console.log('WARN: category selection error:', catErr);
@@ -438,34 +814,35 @@ function fmtAction(label, obj) {
     }
   }
 
-  console.log('已填充完成，正在自动点击发布...');
+  if (noPublish) {
+    console.log('NO_PUBLISH: 已填充完成（--no-publish），不会自动点击发布。');
+  } else {
+    console.log('已填充完成，正在自动点击发布...');
+  }
 
-  try {
-    // 再次等待页面空闲
-    await page.waitForLoadState('networkidle').catch(() => {});
-    
-    const publishBtnSelector = '.publish-button--KBpTVopQ';
-    const publishBtn = await pickVisible(
-      page.locator(publishBtnSelector),
-      page.getByRole('button', { name: /发布|提交/u })
-    );
+  if (!noPublish) {
+    try {
+      // 再次等待页面空闲
+      await page.waitForLoadState('networkidle').catch(() => {});
 
-    if (publishBtn) {
-      // 检查按钮是否被禁用
-      const isDisabled = await publishBtn.evaluate(el => el.disabled || el.getAttribute('aria-disabled') === 'true' || el.classList.contains('ant-btn-loading'));
-      if (isDisabled) {
-        console.log('发布按钮当前不可用，再次等待图片处理...');
-        await page.waitForTimeout(6000); // 增加等待时间
+      const publishBtn = await getPublishButton();
+      if (publishBtn) {
+        // 检查按钮是否被禁用
+        const isDisabled = await isButtonDisabled(publishBtn);
+        if (isDisabled) {
+          console.log('发布按钮当前不可用，可能仍在校验/上传处理中...');
+          await page.waitForTimeout(3000);
+        }
+
+        await publishBtn.click({ timeout: 10000 });
+        console.log('已成功点击发布按钮！');
+        await page.waitForTimeout(3000); // 等待发布成功或跳转
+      } else {
+        console.log('WARN: 未找到发布按钮');
       }
-      
-      await publishBtn.click({ timeout: 10000 });
-      console.log('已成功点击发布按钮！');
-      await page.waitForTimeout(3000); // 等待发布成功或跳转
-    } else {
-      console.log('WARN: 未找到发布按钮');
+    } catch (e) {
+      console.log('WARN: 自动点击发布失败:', String(e?.message || e));
     }
-  } catch(e) {
-    console.log('WARN: 自动点击发布失败:', String(e?.message || e));
   }
 
   // Keep the browser open for manual review if requested.
