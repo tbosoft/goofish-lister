@@ -112,9 +112,20 @@ function takeCoreSectionLines(bodyText, listingTitle) {
     if (idx !== -1) start = idx;
   }
 
+  // If title match failed (start == 0), try to skip past known header patterns.
+  // Goofish pages typically have: search bar -> seller info -> price -> stats -> description
+  if (start === 0 && lines.length > 5) {
+    for (let i = 0; i < Math.min(lines.length, 30); i++) {
+      // Description usually starts after the browsing count or price line
+      if (/^\d+浏览$/.test(lines[i]) || /^\d+人想要$/.test(lines[i])) {
+        start = i + 1;
+      }
+    }
+  }
+
   // End before recommendations/footer.
   let end = lines.length;
-  const endMarkers = ['为你推荐', '发闲置', '消息', '商品码', '客服', '回顶部', '© Goofish.com', '闲鱼社区'];
+  const endMarkers = ['为你推荐', '发闲置', '消息', '商品码', '客服', '回顶部', '© Goofish.com', '闲鱼社区', '统一社会信用代码', '增值电信业务', '你可能还想找', '相关推荐', '猜你喜欢'];
   for (let i = start; i < lines.length; i++) {
     if (endMarkers.some((m) => lines[i].includes(m))) {
       end = i;
@@ -122,17 +133,55 @@ function takeCoreSectionLines(bodyText, listingTitle) {
     }
   }
 
-  // Slice and remove obvious UI actions.
-  const uiNoise = ['展开', '聊一聊', '立即购买', '收藏', '举报', '担保交易', '搜索', '网页版'];
+  // Slice and remove obvious UI actions (exact match).
+  const uiNoiseExact = ['展开', '聊一聊', '立即购买', '收藏', '举报', '担保交易', '搜索', '网页版', '闲鱼号', '关注'];
+  // Patterns that indicate noise lines (partial/regex match).
+  const uiNoisePatterns = [
+    /^搜索/,                          // 搜索栏
+    /^网页版/,                        // 网页版提示
+    /来闲鱼\d+天/,                    // 来闲鱼XX天
+    /卖出\d+件/,                      // 卖出XX件宝贝
+    /好评率\d+/,                      // 好评率XX%
+    /^\d+分钟前来过$/,                // X分钟前来过
+    /^\d+小时前来过$/,                // X小时前来过
+    /^\d+天前来过$/,                  // X天前来过
+    /^刚刚来过$/,
+    /^\d+人想要$/,                    // XX人想要
+    /^\d+浏览$/,                      // XX浏览
+    /^¥\s*$/,                         // 孤立的 ¥ 符号
+    /^[0-9]+(?:\.[0-9]+)?$/,          // 孤立数字（价格片段）
+    /^包邮$/,
+    /^小刀价$/,
+    /^回头客超\d+%/,                  // 回头客超XX%卖家
+    /^卖家信用/,                      // 卖家信用极好/优秀
+    /^统一社会信用代码/,              // 页脚法律信息
+    /^增值电信/,
+    /^营业性演出/,
+    /^广播电视/,
+    /^网络食品/,
+    /^集邮市场/,
+    /^APP备案号/,
+    /^浙公网安备/,
+    /^电子营业执照/,
+    /^闲鱼社区/,
+    /^软件许可协议/,
+    /^闲鱼规则/,
+    /^意见征集/,
+    /^算法备案/,
+    /^推动绿色发展/,
+    /《.*》$/,                        // 孤立的法规引用
+  ];
+
   const core = lines
     .slice(start, end)
     .map(stripEmojiTokens)
     .map((l) => l.replace(/^#\s*/g, ''))
-    .filter((l) => l && !uiNoise.some((m) => l === m))
+    .filter((l) => l && !uiNoiseExact.includes(l))
+    .filter((l) => !uiNoisePatterns.some((re) => re.test(l)))
     // Drop stray footer/page artifacts like single-digit lines (e.g. "6")
     .filter((l) => !/^\d{1,2}$/.test(l));
 
-  // Drop leading metrics lines if present (want/view/price snippets).
+  // Drop leading noise lines: metrics, seller info, short fragments.
   while (core.length && (/^(\d+\s*人想要|\d+\s*浏览|¥\s*$|[0-9]+(?:\.[0-9]+)?$|包邮|小刀价)$/u.test(core[0]) || core[0].length <= 2)) {
     core.shift();
   }

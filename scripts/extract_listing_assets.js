@@ -233,10 +233,18 @@ function truncateText(s, maxLen) {
     const metaDesc = document.querySelector('meta[name="description"]')?.getAttribute('content') || null;
     const ogDesc = document.querySelector('meta[property="og:description"]')?.getAttribute('content') || null;
 
-    // Specific Goofish description selectors
-    const gfDesc = document.querySelector('.desc--GaIUKUQY')?.innerText || 
-                   document.querySelector('.main--Nu33bWl6')?.innerText || 
-                   document.querySelector('[class*="desc--"]')?.innerText ||
+    // Specific Goofish description selectors (narrowest first)
+    const gfDesc = document.querySelector('.desc--GaIUKUQY')?.innerText ||
+                   // Try any element whose class starts with "desc--" (hashed class)
+                   (() => {
+                     const candidates = document.querySelectorAll('[class*="desc--"]');
+                     for (const el of candidates) {
+                       const txt = (el.innerText || '').trim();
+                       // Only accept if it looks like a real description (>20 chars, not a single word)
+                       if (txt.length > 20 && txt.includes('\n') || txt.length > 50) return txt;
+                     }
+                     return null;
+                   })() ||
                    null;
 
     const bodyText = (document.body?.innerText || '').replace(/\s+\n/g, '\n').trim();
