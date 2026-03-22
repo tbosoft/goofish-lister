@@ -87,6 +87,23 @@ function truncateText(s, maxLen) {
     process.exit(2);
   }
 
+  // Resolve short URLs (m.tb.cn, etc.) to full Goofish URLs via HTTP redirect.
+  let resolvedUrl = url;
+  const shortUrlPatterns = [/m\.tb\.cn/i, /tb\.cn/i, /taobao\.com\/.*spread/i];
+  if (shortUrlPatterns.some((re) => re.test(url))) {
+    console.log(`Resolving short URL: ${url}`);
+    try {
+      const resp = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+      const finalUrl = resp.url;
+      if (finalUrl && finalUrl !== url) {
+        console.log(`Resolved to: ${finalUrl}`);
+        resolvedUrl = finalUrl;
+      }
+    } catch (e) {
+      console.log(`WARN: Could not resolve short URL via fetch, will let browser handle redirect: ${e.message}`);
+    }
+  }
+
   const outDir = path.join(process.cwd(), 'outputs');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const defaultOutPath = path.join(outDir, `listing-assets-${stamp}.json`);
@@ -175,7 +192,17 @@ function truncateText(s, maxLen) {
 
   const page = ctx.pages()[0] || (await ctx.newPage());
   // Goofish requires network idle or specific selector loading to properly fetch dynamic details
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+  await page.goto(resolvedUrl, { waitUntil: 'networkidle', timeout: 60000 });
+
+  // If the URL was a short link that required JS redirect, wait for it to land on goofish.com.
+  if (resolvedUrl !== url || !page.url().includes('goofish.com')) {
+    try {
+      await page.waitForURL(/goofish\.com/, { timeout: 15000 });
+      console.log(`Landed on: ${page.url()}`);
+    } catch {
+      console.log(`WARN: Page did not redirect to goofish.com (current: ${page.url()}). Proceeding anyway.`);
+    }
+  }
   
   // Wait longer, or specifically for images to load, since Goofish is heavily dynamic React.
   try {
@@ -558,8 +585,11 @@ function truncateText(s, maxLen) {
     }
   }
 
+  // Use the final page URL (after any redirects) as the canonical URL.
+  const finalUrl = page.url();
+
   const out = {
-    url,
+    url: finalUrl,
     fetchedAt: new Date().toISOString(),
     title: extracted.title || null,
     description: extracted.description || null,
@@ -570,6 +600,7 @@ function truncateText(s, maxLen) {
       script: 'skills/goofish-lister/scripts/extract_listing_assets.js',
       inputs: {
         url,
+        resolvedUrl: resolvedUrl !== url ? resolvedUrl : undefined,
         out: outArg || null,
         maxImages,
         dryRun: false,

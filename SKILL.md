@@ -43,7 +43,9 @@ description: Search Goofish (闲鱼) listings by keyword(s) or URL, extract info
 > 相关脚本：`scripts/fill_publish_form.js`
 
 ## Inputs（你需要提供什么）
-- `url`: 需要采集并发布的闲鱼商品链接。
+- `url`: 闲鱼商品链接。支持以下格式：
+  - 完整链接：`https://www.goofish.com/item?id=...`
+  - 淘宝/闲鱼短链：`https://m.tb.cn/...`（自动解析跳转）
 - 或 `keywords`: 关键词（如果需要先盲搜商品）
 
 ## Outputs（我会产出什么）
