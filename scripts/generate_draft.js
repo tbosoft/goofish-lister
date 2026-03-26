@@ -154,6 +154,18 @@ function takeCoreSectionLines(bodyText, listingTitle) {
     /^小刀价$/,
     /^回头客超\d+%/,                  // 回头客超XX%卖家
     /^卖家信用/,                      // 卖家信用极好/优秀
+    /^为你推荐/,
+    /^你可能还想找/,
+    /^相关推荐/,
+    /^猜你喜欢/,
+    /^更多商品/,
+    /^更多宝贝/,
+    /^相似商品/,
+    /^同款/,
+    /^小葵的宝藏资料库$/,
+    /^柏林买盲盒的菠菜$/,
+    /^可乐要加冰吖$/,
+    /医学临床三基训练护士分册/,
     /^统一社会信用代码/,              // 页脚法律信息
     /^增值电信/,
     /^营业性演出/,
@@ -170,6 +182,9 @@ function takeCoreSectionLines(bodyText, listingTitle) {
     /^算法备案/,
     /^推动绿色发展/,
     /《.*》$/,                        // 孤立的法规引用
+    /^【个人闲置全新.*】$/,
+    /（第五版）/,
+    /配套训练试题集/,
   ];
 
   const core = lines
@@ -282,7 +297,21 @@ async function listJpgFiles(dir) {
   }
 
   const title = stripEmojiTokens(cleanTitle(raw.title || ''));
-  const coreLines = takeCoreSectionLines(raw.bodyText || '', raw.title || '');
+  const descSeed = String(raw.description || '').trim();
+  const bodySeed = String(raw.bodyText || '').trim();
+  let coreLines = [];
+
+  if (descSeed) {
+    coreLines = normalizeLines(descSeed)
+      .map(stripEmojiTokens)
+      .map((l) => l.replace(/^#\s*/g, ''))
+      .filter(Boolean);
+  }
+
+  if (coreLines.length < 2 && bodySeed) {
+    coreLines = takeCoreSectionLines(bodySeed, raw.title || '');
+  }
+
   const description = buildStructuredDescription(coreLines);
 
   // Images selection:

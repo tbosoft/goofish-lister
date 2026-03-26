@@ -254,32 +254,122 @@ function truncateText(s, maxLen) {
 
     const title = document.title || null;
 
+    function cleanText(txt) {
+      return String(txt || '')
+        .replace(/\s+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    function isNoiseText(txt) {
+      const s = cleanText(txt);
+      if (!s) return true;
+      const lines = s.split(/\n+/).map((x) => x.trim()).filter(Boolean);
+      if (!lines.length) return true;
+      const joined = lines.join(' | ');
+      const noiseRes = [
+        /^\d+人想要$/,
+        /^\d+浏览$/,
+        /^卖家信用/,
+        /^回头客超\d+%/,
+        /^为你推荐/,
+        /^你可能还想找/,
+        /^相关推荐/,
+        /^猜你喜欢/,
+        /^更多商品/,
+        /^更多宝贝/,
+        /^相似商品/,
+        /^同款/,
+        /^聊一聊$/,
+        /^收藏$/,
+        /^举报$/,
+        /^担保交易$/,
+        /^小刀价$/,
+        /^包邮$/,
+        /^¥\s*$/,
+        /^[0-9]+(?:\.[0-9]+)?$/,
+      ];
+      const noisyLines = lines.filter((line) => noiseRes.some((re) => re.test(line)));
+      if (noisyLines.length >= Math.max(2, Math.ceil(lines.length * 0.5))) return true;
+      if (/卖家信用|人想要|浏览|为你推荐|猜你喜欢|相关推荐/.test(joined)) return true;
+      return false;
+    }
+
+    function scoreDescCandidate(el) {
+      if (!el) return -1;
+      const txt = cleanText(el.innerText || el.textContent || '');
+      if (!txt || isNoiseText(txt)) return -1;
+      const rect = el.getBoundingClientRect?.() || { width: 0, height: 0, top: 0 };
+      const area = safeNum(rect.width) * safeNum(rect.height);
+      let score = 0;
+      score += Math.min(txt.length, 4000);
+      score += Math.min(area / 20, 3000);
+      const cls = String(el.className || '');
+      if (/desc|detail|content|introduc|article|rich/i.test(cls)) score += 1500;
+      if (rect.top > 0 && rect.top < 2200) score += 600;
+      if (txt.includes('\n')) score += 300;
+      if (txt.length < 20) score -= 2000;
+      return score;
+    }
+
     // Best-effort description extraction:
-    // - Prefer meta description / og:description
-    // - Fall back to largest text block in the page.
+    // 1) Prefer detail/main-area scoped nodes
+    // 2) Then meta description
+    // 3) Last resort: body text (cleaned)
     const metaDesc = document.querySelector('meta[name="description"]')?.getAttribute('content') || null;
     const ogDesc = document.querySelector('meta[property="og:description"]')?.getAttribute('content') || null;
 
-    // Specific Goofish description selectors (narrowest first)
-    const gfDesc = document.querySelector('.desc--GaIUKUQY')?.innerText ||
-                   // Try any element whose class starts with "desc--" (hashed class)
-                   (() => {
-                     const candidates = document.querySelectorAll('[class*="desc--"]');
-                     for (const el of candidates) {
-                       const txt = (el.innerText || '').trim();
-                       // Only accept if it looks like a real description (>20 chars, not a single word)
-                       if (txt.length > 20 && txt.includes('\n') || txt.length > 50) return txt;
-                     }
-                     return null;
-                   })() ||
-                   null;
+    const detailRoots = [
+      document.querySelector('[class*="item-main-window"]'),
+      document.querySelector('main'),
+      document.querySelector('[class*="detail"]'),
+      document.querySelector('[class*="content"]'),
+    ].filter(Boolean);
 
-    const bodyText = (document.body?.innerText || '').replace(/\s+\n/g, '\n').trim();
+    const descCandidates = [];
+    const pushed = new Set();
+    function pushDescCandidate(el, source) {
+      if (!el || pushed.has(el)) return;
+      pushed.add(el);
+      const text = cleanText(el.innerText || el.textContent || '');
+      if (!text || isNoiseText(text)) return;
+      descCandidates.push({ source, text, score: scoreDescCandidate(el) });
+    }
 
-    let description = gfDesc || ogDesc || metaDesc;
+    for (const root of detailRoots) {
+      pushDescCandidate(root, 'detailRoot');
+      const selectors = [
+        '[class*="desc--"]',
+        '[class*="desc"]',
+        '[class*="detail"]',
+        '[class*="content"]',
+        '[class*="introduc"]',
+        '[class*="article"]',
+        'section',
+        'article',
+        'div',
+      ];
+      for (const sel of selectors) {
+        for (const el of Array.from(root.querySelectorAll(sel)).slice(0, 120)) {
+          pushDescCandidate(el, `root:${sel}`);
+        }
+      }
+    }
+
+    // Whole-page fallback candidates, but only for promising desc-like nodes.
+    for (const el of Array.from(document.querySelectorAll('[class*="desc--"], [class*="desc"], [class*="detail"], [class*="content"], article, section')).slice(0, 200)) {
+      pushDescCandidate(el, 'pageScoped');
+    }
+
+    descCandidates.sort((a, b) => b.score - a.score || b.text.length - a.text.length);
+    const gfDesc = descCandidates[0]?.text || null;
+
+    const bodyText = cleanText(document.body?.innerText || '');
+
+    let description = gfDesc || cleanText(ogDesc || metaDesc || '');
     if (!description) {
-      // Fallback: pick a chunk from bodyText.
-      description = bodyText ? bodyText.slice(0, 800) : null;
+      // Fallback: pick a smaller cleaned chunk from bodyText.
+      description = bodyText ? bodyText.slice(0, 500) : null;
     }
 
     // Images: collect metrics to filter out icons/UI.
