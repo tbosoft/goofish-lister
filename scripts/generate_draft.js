@@ -5,7 +5,7 @@
  * No external model calls. No browser automation.
  *
  * Usage:
- *   node skills/goofish-lister/scripts/generate_draft.js --in outputs/listing-assets-xxx.json --category "电子资料"
+ *   node skills/goofish-lister/scripts/generate_draft.js --in outputs/listing-assets-xxx.json --category "笔记资料"
  */
 
 const fs = require('fs/promises');
@@ -276,7 +276,7 @@ async function listJpgFiles(dir) {
   const inPath = arg('--in');
   const outArg = arg('--out');
 
-  const category = arg('--category', '') || '电子资料';
+  const category = arg('--category', '') || '笔记资料';
   const priceStrategy = arg('--price-strategy', 'minus2pct');
   const roundMode = arg('--round', 'fen');
 

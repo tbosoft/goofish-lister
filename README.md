@@ -1,43 +1,45 @@
-# Goofish Lister (闲鱼上架助手)
+# Goofish Lister
 
-这是一个为您提供“全自动跟卖/搬运”体验的 Skill。它能自动解析闲鱼商品，提取精准图文及详情，并协助您快速在自己的账号下完成发布。
+这个 skill 现在是单入口固定流程。
 
-## 核心功能
-- **精准采集**：自动锁定商品主图，过滤无关推荐位图片。
-- **深度处理**：自动处理描述文案，支持图片白底美化。
-- **自动化发布**：自动填充表单（标题、描述、分类、价格、预览图），并自动点击发布按钮。
-- **分类适配**：默认适配“笔记资料”等常用类目。
+用户只需要提供一个闲鱼商品链接，系统就会按固定步骤执行：
 
-## 安装指南
+1. 提取商品图文
+2. 下载并处理图片
+3. 生成上架文案
+4. 固定类目为 `笔记资料`
+5. 打开闲鱼发布页并自动发布
 
-1. **环境准备**：
-   确保您的系统中已安装 Node.js。
-   
-2. **安装依赖**：
-   在 `goofish-lister` 目录下运行：
-   ```bash
-   npm install
-   npx playwright install chrome
-   ```
+## 唯一入口
 
-3. **初始化登录**：
-   首次使用请先运行登录脚本并完成闲鱼网页版扫码登录：
-   ```bash
-   npm run login
-   ```
-   注：登录状态将加密保存在本地 `~/.openclaw/goofish-profile` 目录中。
+```bash
+npm run publish:url -- "https://www.goofish.com/item?id=..."
+```
 
-## 使用方法（对 AI 说）
+也支持短链：
 
-您可以直接对支持 Skill 的 AI 助手说：
-- “帮我采集这个闲鱼链接：`https://...`，重新整理图片和文案，全自动帮我发上架。”
-- “帮我找一个 Switch OLED 的闲鱼链接，采集信息并自动发布。”
+```bash
+npm run publish:url -- "https://m.tb.cn/..."
+```
 
-## 开发者说明
+## 首次使用
 
-- **采集脚本**：`scripts/extract_listing_assets.js`
-- **草稿生成**：`scripts/generate_draft.js`
-- **发布脚本**：`scripts/fill_publish_form.js`
+先安装依赖：
 
-> [!IMPORTANT]
-> 本工具仅供学习与个人效率提升使用，请确保您在操作过程中拥有相关内容的版权或授权。
+```bash
+npm install
+npx playwright install chrome
+```
+
+首次登录闲鱼：
+
+```bash
+npm run login
+```
+
+## 设计原则
+
+- 不再支持关键词搜索入口
+- 不再要求 AI 理解多种参数
+- 默认走固定处理和固定发布流程
+- 底层脚本仍保留，但对外推荐只使用 `publish:url`
