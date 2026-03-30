@@ -3,7 +3,7 @@
  * Fill Goofish publish form from a generated draft JSON.
  *
  * Safety:
- * - NEVER clicks final publish/confirm.
+ * - Auto-clicks the final publish button unless --no-publish is provided.
  * - Opens headed persistent browser context.
  * - Intended for single-item assisted listing; no batching.
  */
@@ -40,6 +40,25 @@ function fmtAction(label, obj) {
   return `- ${label}${s}`;
 }
 
+function composeDescription(title, description, includeTitleInDescription) {
+  const cleanTitle = String(title || '').trim();
+  const cleanDescription = String(description || '').trim();
+
+  if (!includeTitleInDescription || !cleanTitle) {
+    return cleanDescription;
+  }
+
+  if (!cleanDescription) {
+    return cleanTitle;
+  }
+
+  if (cleanDescription.startsWith(cleanTitle)) {
+    return cleanDescription;
+  }
+
+  return `${cleanTitle}\n\n${cleanDescription}`;
+}
+
 (async () => {
   const draftPath = arg('--draft');
   const dryRun = hasFlag('--dry-run');
@@ -58,7 +77,7 @@ function fmtAction(label, obj) {
 
   const draft = JSON.parse(await fs.readFile(draftPath, 'utf8'));
   const title = stripEmojiForGoofish(String(draft.title || '').trim());
-  const description = stripEmojiForGoofish(String(draft.description || '').trim());
+  const rawDescription = stripEmojiForGoofish(String(draft.description || '').trim());
   const price = draft.price;
   const draftCategory = String(draft.category || '').trim();
   const category = draftCategory || '笔记资料';
@@ -67,7 +86,7 @@ function fmtAction(label, obj) {
   const plan = [
     fmtAction('Open publish page', { url: 'https://www.goofish.com/publish' }),
     fmtAction('Fill title', { title: title.slice(0, 40) + (title.length > 40 ? '...' : '') }),
-    fmtAction('Fill description', { chars: description.length }),
+    fmtAction('Fill description', { chars: rawDescription.length }),
     fmtAction('Fill price', { price }),
     fmtAction('Select category', { category }),
     fmtAction('Upload images', { count: images.length }),
@@ -462,7 +481,8 @@ function fmtAction(label, obj) {
   }
 
   // 1) Title
-  // Priority: placeholder -> label -> AntD form item label -> fallback visible text input
+  // Priority: placeholder -> label -> AntD form item label.
+  // Do not fall back to generic text inputs; on the new page those may be price inputs.
   let titleErr = null;
   let titleOk = false;
   try {
@@ -476,21 +496,15 @@ function fmtAction(label, obj) {
       )) ||
       (await fillFirst([page.getByLabel(/标题|宝贝标题|商品标题/u)], title)) ||
       (await fillAntdFormItem(/标题|宝贝标题|商品标题/u, title));
-
-    if (!titleOk) {
-      const fallback = await pickVisible(
-        page.locator('input[type="text"], input:not([type]), input[type="search"]')
-      );
-      if (fallback) {
-        await fallback.click({ timeout: 2000 });
-        await fallback.fill(title);
-        titleOk = true;
-      }
-    }
   } catch (e) {
     titleErr = String(e?.message || e);
   }
   if (!titleOk) console.log('WARN: failed to fill title.', titleErr ? `reason=${titleErr}` : '');
+
+  const description = composeDescription(title, rawDescription, !titleOk);
+  if (!titleOk && title) {
+    console.log('INFO: no standalone title field found; prepending title to description.');
+  }
 
   // 2) Description
   // Priority: textarea with placeholder/label -> AntD form item label -> any textarea -> contenteditable
@@ -649,13 +663,13 @@ function fmtAction(label, obj) {
     // NOTE: the input itself may have no id, even if the label has a `for`.
     const exactByFor = page
       .locator('.ant-form-item')
-      .filter({ has: page.locator('label[for=”itemPriceDTO_priceInCent”]') })
+      .filter({ has: page.locator('label[for="itemPriceDTO_priceInCent"]') })
       .locator('input');
     if (await fillInputRobust(exactByFor)) return true;
 
     const exactByTitle = page
       .locator('.ant-form-item')
-      .filter({ has: page.locator('.ant-form-item-label label[title=”价格”]') })
+      .filter({ has: page.locator('.ant-form-item-label label[title="价格"]') })
       .locator('input');
     if (await fillInputRobust(exactByTitle)) return true;
 
