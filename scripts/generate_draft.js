@@ -11,6 +11,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { buildMeta } = require('./lib/output_meta');
+const { sanitizeGoofishText } = require('./lib/goofish_text');
 
 function arg(name, def = null) {
   const idx = process.argv.indexOf(name);
@@ -78,27 +79,12 @@ function normalizeLines(bodyText) {
 }
 
 function stripEmojiTokens(s) {
-  // Remove emoji and bracket-style emoji tokens like [闪亮][流泪]
-  let out = String(s || '');
-
-  // Bracket tokens
-  out = out.replace(/\[[^\]]{1,12}\]/g, '');
-
-  // Emoji joiners / variation selectors
-  out = out.replace(/[\u200D\uFE0F]/g, '');
+  let out = sanitizeGoofishText(s, { stripBracketTokens: true });
 
   // Trailing artifacts sometimes appear as a lone digit appended after punctuation, e.g. "同学！6"
   out = out.replace(/([!！。\.])\s*\d{1,2}\s*$/u, '$1');
 
-  // Unicode emoji (best-effort)
-  try {
-    out = out.replace(/\p{Extended_Pictographic}/gu, '');
-  } catch {
-    // Fallback ranges cover most emojis + dingbats (e.g. ✅)
-    out = out.replace(/[\u{1F000}-\u{1FAFF}]/gu, '').replace(/[\u{2600}-\u{27BF}]/gu, '');
-  }
-
-  return out.replace(/\s{2,}/g, ' ').trim();
+  return out.trim();
 }
 
 function takeCoreSectionLines(bodyText, listingTitle) {

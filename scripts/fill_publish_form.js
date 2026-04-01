@@ -12,17 +12,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const os = require('os');
 const { chromium } = require('playwright');
-
-function stripEmojiForGoofish(s) {
-  let out = String(s || '');
-  out = out.replace(/[\u200D\uFE0F]/g, '');
-  try {
-    out = out.replace(/\p{Extended_Pictographic}/gu, '');
-  } catch {
-    out = out.replace(/[\u{1F000}-\u{1FAFF}]/gu, '').replace(/[\u{2600}-\u{27BF}]/gu, '');
-  }
-  return out;
-}
+const { sanitizeGoofishText } = require('./lib/goofish_text');
 
 function arg(name, def = null) {
   const idx = process.argv.indexOf(name);
@@ -76,12 +66,20 @@ function composeDescription(title, description, includeTitleInDescription) {
   }
 
   const draft = JSON.parse(await fs.readFile(draftPath, 'utf8'));
-  const title = stripEmojiForGoofish(String(draft.title || '').trim());
-  const rawDescription = stripEmojiForGoofish(String(draft.description || '').trim());
+  const originalTitle = String(draft.title || '').trim();
+  const originalDescription = String(draft.description || '').trim();
+  const title = sanitizeGoofishText(originalTitle);
+  const rawDescription = sanitizeGoofishText(originalDescription);
   const price = draft.price;
   const draftCategory = String(draft.category || '').trim();
   const category = draftCategory || '笔记资料';
   const images = Array.isArray(draft.images) ? draft.images : [];
+
+  if (title !== originalTitle || rawDescription !== originalDescription) {
+    console.log(
+      `INFO: 发布前已过滤 emoji 字符（titleChanged=${title !== originalTitle}, descriptionChanged=${rawDescription !== originalDescription}）。`
+    );
+  }
 
   const plan = [
     fmtAction('Open publish page', { url: 'https://www.goofish.com/publish' }),
@@ -501,7 +499,7 @@ function composeDescription(title, description, includeTitleInDescription) {
   }
   if (!titleOk) console.log('WARN: failed to fill title.', titleErr ? `reason=${titleErr}` : '');
 
-  const description = composeDescription(title, rawDescription, !titleOk);
+  const description = sanitizeGoofishText(composeDescription(title, rawDescription, !titleOk));
   if (!titleOk && title) {
     console.log('INFO: no standalone title field found; prepending title to description.');
   }
