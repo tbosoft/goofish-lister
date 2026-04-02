@@ -9,10 +9,14 @@
  */
 
 const fs = require('fs/promises');
-const path = require('path');
-const os = require('os');
 const { chromium } = require('playwright');
 const { sanitizeGoofishText } = require('./lib/goofish_text');
+const {
+  getGoofishUserDataDir,
+  hasCachedLoginProfile,
+  getLoginRequiredMessage,
+  getReloginRequiredMessage,
+} = require('./lib/goofish_login');
 
 function arg(name, def = null) {
   const idx = process.argv.indexOf(name);
@@ -115,7 +119,12 @@ function composeDescription(title, description, includeTitleInDescription) {
     process.exit(0);
   }
 
-  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.openclaw', 'goofish-profile');
+  const userDataDir = getGoofishUserDataDir();
+  if (!hasCachedLoginProfile(userDataDir)) {
+    console.error(getLoginRequiredMessage(userDataDir));
+    process.exit(2);
+  }
+
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
     channel: 'chrome',
@@ -126,6 +135,13 @@ function composeDescription(title, description, includeTitleInDescription) {
   const page = ctx.pages()[0] || (await ctx.newPage());
   await page.goto('https://www.goofish.com/publish', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(4500);
+
+  const pageText = await page.evaluate(() => document.body?.innerText || '');
+  if (/短信登录|密码登录|请先登录|去登录|立即登录/.test(pageText)) {
+    console.error(getReloginRequiredMessage(userDataDir));
+    await ctx.close();
+    process.exit(2);
+  }
 
   if (debugSelectors) {
     const debug = await page.evaluate(() => {

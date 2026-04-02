@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { hasCachedLoginProfile, getLoginRequiredMessage } = require('./lib/goofish_login');
 
 const FIXED_CATEGORY = '笔记资料';
 const FIXED_PRICE_STRATEGY = 'minus2pct';
@@ -86,6 +87,11 @@ function runNodeScript(scriptName, args) {
   const url = resolveUrl();
   if (!looksLikeUrl(url)) {
     console.error('Missing supported Goofish URL. Pass one 闲鱼商品链接或短链 as the first argument or via --url.');
+    process.exit(2);
+  }
+
+  if (!hasCachedLoginProfile()) {
+    console.error(getLoginRequiredMessage());
     process.exit(2);
   }
 

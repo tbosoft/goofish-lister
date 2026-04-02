@@ -37,6 +37,13 @@ npx playwright install chrome
 npm run login
 ```
 
+说明：
+
+- 登录态不是单独保存的 token，而是 Playwright 持久化浏览器 profile 里的 cookie / session。
+- `npm run login` 会打开一个真实浏览器窗口，需要你手动完成闲鱼登录。
+- 登录完成后关闭浏览器，后续发布流程会复用这份本地缓存的登录态。
+- 如果还没有这份缓存，先登录，再执行 `npm run publish:url -- "<闲鱼链接>"`。
+
 ## 设计原则
 
 - 不再支持关键词搜索入口
