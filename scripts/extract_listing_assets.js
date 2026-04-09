@@ -375,6 +375,7 @@ function truncateText(s, maxLen) {
     // Images: collect metrics to filter out icons/UI.
     const imgCandidates = [];
     const seen = new Set();
+    let imageOrder = 0;
 
     function pushImgCandidate(u, alt, source, imgEl) {
       const url = normUrl(u);
@@ -396,6 +397,7 @@ function truncateText(s, maxLen) {
       const area = rectW * rectH;
 
       imgCandidates.push({
+        order: imageOrder++,
         url,
         alt: alt || null,
         source: source || null,
@@ -446,20 +448,10 @@ function truncateText(s, maxLen) {
       return largeNatural || largeRect;
     });
 
-    // Sort by visible area first, then natural size.
-    large.sort((a, b) => {
-      const da = (b.area || 0) - (a.area || 0);
-      if (da) return da;
-      const dn = (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight);
-      if (dn) return dn;
-      // Prefer in-viewport
-      if (a.inViewport !== b.inViewport) return a.inViewport ? -1 : 1;
-      return 0;
-    });
-
     const images = [];
     for (const c of large) {
       images.push({
+        order: c.order,
         url: c.url,
         alt: c.alt,
         source: c.source,
@@ -486,7 +478,17 @@ function truncateText(s, maxLen) {
           if (bgSeen.has(uu)) continue;
           bgSeen.add(uu);
           // No size metrics for CSS backgrounds here.
-          images.push({ url: uu, alt: null, source: 'css.backgroundImage', width: null, height: null, rectW: null, rectH: null, area: null });
+          images.push({
+            order: imageOrder++,
+            url: uu,
+            alt: null,
+            source: 'css.backgroundImage',
+            width: null,
+            height: null,
+            rectW: null,
+            rectH: null,
+            area: null,
+          });
           if (images.length >= maxImagesInner) break;
         }
         if (images.length >= maxImagesInner) break;
@@ -515,6 +517,7 @@ function truncateText(s, maxLen) {
     if (seen2.has(u)) continue;
     seen2.add(u);
     filteredImages.push({
+      order: Number.isFinite(im.order) ? im.order : filteredImages.length,
       url: u,
       alt: im.alt ?? null,
       source: im.source ?? null,

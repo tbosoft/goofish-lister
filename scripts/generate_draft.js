@@ -250,12 +250,18 @@ function buildStructuredDescription(coreLines) {
     .join('\n');
 }
 
-async function listJpgFiles(dir) {
-  const names = await fs.readdir(dir);
-  return names
-    .filter((n) => n.toLowerCase().endsWith('.jpg') || n.toLowerCase().endsWith('.jpeg'))
-    .sort((a, b) => a.localeCompare(b))
-    .map((n) => path.join(dir, n));
+function listImagePaths(images) {
+  return (Array.isArray(images) ? images : [])
+    .map((im, idx) => ({
+      order: Number.isFinite(im?.order) ? im.order : idx,
+      path:
+        (im?.processedStatus === 'ok' && im?.processedPath) ||
+        (im?.downloadStatus === 'ok' && im?.localPath) ||
+        null,
+    }))
+    .filter((item) => item.path)
+    .sort((a, b) => a.order - b.order)
+    .map((item) => item.path);
 }
 
 (async () => {
@@ -301,16 +307,9 @@ async function listJpgFiles(dir) {
   const description = buildStructuredDescription(coreLines);
 
   // Images selection:
-  // - Prefer processedDir JPEGs
-  // - Fallback to downloaded localPath
-  let images = [];
-  if (raw.processedDir) {
-    try {
-      images = await listJpgFiles(raw.processedDir);
-    } catch {
-      images = [];
-    }
-  }
+  // - Prefer per-image processedPath/localPath so we preserve original listing order
+  // - Fallback to existing raw.images order for older outputs
+  let images = listImagePaths(raw.images);
   if (!images.length) {
     images = (raw.images || [])
       .map((im) => im?.localPath)
