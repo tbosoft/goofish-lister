@@ -13,6 +13,7 @@ const { chromium } = require('playwright');
 const { sanitizeGoofishText } = require('./lib/goofish_text');
 const {
   getGoofishUserDataDir,
+  normalizeGoofishAccountName,
   hasCachedLoginProfile,
   getLoginRequiredMessage,
   getReloginRequiredMessage,
@@ -63,6 +64,7 @@ function composeDescription(title, description, includeTitleInDescription) {
   const holdMinutes = parseFloat(arg('--hold-minutes', '30'));
   const noPublish = hasFlag('--no-publish');
   const forceCategory = hasFlag('--force-category');
+  const account = normalizeGoofishAccountName(arg('--account'));
 
   if (!draftPath) {
     console.error('Missing --draft <draft.json>');
@@ -119,9 +121,9 @@ function composeDescription(title, description, includeTitleInDescription) {
     process.exit(0);
   }
 
-  const userDataDir = getGoofishUserDataDir();
+  const userDataDir = getGoofishUserDataDir(account);
   if (!hasCachedLoginProfile(userDataDir)) {
-    console.error(getLoginRequiredMessage(userDataDir));
+    console.error(getLoginRequiredMessage(userDataDir, account));
     process.exit(2);
   }
 
@@ -138,7 +140,7 @@ function composeDescription(title, description, includeTitleInDescription) {
 
   const pageText = await page.evaluate(() => document.body?.innerText || '');
   if (/短信登录|密码登录|请先登录|去登录|立即登录/.test(pageText)) {
-    console.error(getReloginRequiredMessage(userDataDir));
+    console.error(getReloginRequiredMessage(userDataDir, account));
     await ctx.close();
     process.exit(2);
   }

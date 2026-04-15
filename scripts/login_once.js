@@ -7,13 +7,20 @@
  *   GOOFISH_USER_DATA_DIR=~/.openclaw/goofish-profile node scripts/login_once.js
  */
 
-const os = require('os');
-const path = require('path');
 const fs = require('fs/promises');
 const { chromium } = require('playwright');
+const { getGoofishUserDataDir, normalizeGoofishAccountName } = require('./lib/goofish_login');
+
+function arg(name, def = null) {
+  const idx = process.argv.indexOf(name);
+  if (idx === -1) return def;
+  const v = process.argv[idx + 1];
+  return v ?? def;
+}
 
 (async () => {
-  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.openclaw', 'goofish-profile');
+  const account = normalizeGoofishAccountName(arg('--account'));
+  const userDataDir = getGoofishUserDataDir(account);
   await fs.mkdir(userDataDir, { recursive: true });
 
   const context = await chromium.launchPersistentContext(userDataDir, {
@@ -32,6 +39,7 @@ const { chromium } = require('playwright');
   await page.goto('https://www.goofish.com/', { waitUntil: 'domcontentloaded', timeout: 0 });
 
   console.log('Goofish login window opened.');
+  console.log(`Account: ${account}`);
   console.log('1) Please login manually in the opened browser window.');
   console.log('2) After login is successful, close the browser window.');
   console.log(`Profile saved at: ${userDataDir}`);

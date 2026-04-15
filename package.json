@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "login": "node scripts/login_once.js",
+    "accounts": "node scripts/list_accounts.js",
     "extract": "node scripts/extract_listing_assets.js",
     "draft": "node scripts/generate_draft.js",
     "publish": "node scripts/fill_publish_form.js",

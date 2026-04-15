@@ -14,7 +14,12 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { hasCachedLoginProfile, getLoginRequiredMessage } = require('./lib/goofish_login');
+const {
+  getGoofishUserDataDir,
+  normalizeGoofishAccountName,
+  hasCachedLoginProfile,
+  getLoginRequiredMessage,
+} = require('./lib/goofish_login');
 
 const FIXED_CATEGORY = '笔记资料';
 const FIXED_PRICE_STRATEGY = 'minus2pct';
@@ -42,6 +47,14 @@ function resolveUrl() {
   return firstPositionalArg();
 }
 
+function createChildEnv(account) {
+  return {
+    ...process.env,
+    GOOFISH_ACCOUNT: account,
+    GOOFISH_USER_DATA_DIR: getGoofishUserDataDir(account),
+  };
+}
+
 function looksLikeUrl(value) {
   const text = String(value || '').trim();
   if (!/^https?:\/\/\S+$/i.test(text)) return false;
@@ -62,11 +75,11 @@ function ensureFile(filePath, label) {
   }
 }
 
-function runNodeScript(scriptName, args) {
+function runNodeScript(scriptName, args, env) {
   const scriptPath = path.join(__dirname, scriptName);
   const result = spawnSync(process.execPath, [scriptPath, ...args], {
     cwd: path.join(__dirname, '..'),
-    env: process.env,
+    env,
     encoding: 'utf8',
   });
 
@@ -85,24 +98,27 @@ function runNodeScript(scriptName, args) {
 
 (async () => {
   const url = resolveUrl();
+  const account = normalizeGoofishAccountName(arg('--account'));
+  const userDataDir = getGoofishUserDataDir(account);
+  const childEnv = createChildEnv(account);
   if (!looksLikeUrl(url)) {
     console.error('Missing supported Goofish URL. Pass one 闲鱼商品链接或短链 as the first argument or via --url.');
     process.exit(2);
   }
 
-  if (!hasCachedLoginProfile()) {
-    console.error(getLoginRequiredMessage());
+  if (!hasCachedLoginProfile(userDataDir)) {
+    console.error(getLoginRequiredMessage(userDataDir, account));
     process.exit(2);
   }
 
-  console.log(`PIPELINE_START: ${url}`);
+  console.log(`PIPELINE_START: account=${account} url=${url}`);
 
   const extractResult = runNodeScript('extract_listing_assets.js', [
     '--url',
     url,
     '--download-images',
     '--beautify-images',
-  ]);
+  ], childEnv);
   const extractPath = lastNonEmptyLine(extractResult.stdout);
   ensureFile(extractPath, 'Extract output');
 
@@ -115,7 +131,7 @@ function runNodeScript(scriptName, args) {
     FIXED_PRICE_STRATEGY,
     '--round',
     FIXED_ROUND_MODE,
-  ]);
+  ], childEnv);
   const draftPath = lastNonEmptyLine(draftResult.stdout);
   ensureFile(draftPath, 'Draft output');
 
@@ -123,9 +139,11 @@ function runNodeScript(scriptName, args) {
     '--draft',
     draftPath,
     '--force-category',
-  ]);
+    '--account',
+    account,
+  ], childEnv);
 
-  console.log(`PIPELINE_DONE: ${draftPath}`);
+  console.log(`PIPELINE_DONE: account=${account} draft=${draftPath}`);
 })().catch((error) => {
   console.error(`PIPELINE_FAILED: ${error.message}`);
   process.exit(1);
