@@ -33,9 +33,13 @@ function arg(name, def = null) {
 }
 
 function firstPositionalArg() {
+  // Skip known flags and their values (e.g. --account <name>)
+  const flagsWithValues = new Set(['--account', '-a', '--url', '-u', '--download-images', '--beautify-images', '--category', '--price-strategy', '--round', '--draft', '--force-category', '--in']);
   for (let i = 2; i < process.argv.length; i++) {
     const value = process.argv[i];
     if (!value || value.startsWith('-')) continue;
+    // If previous arg was a flag that takes a value, skip this one
+    if (i > 2 && flagsWithValues.has(process.argv[i - 1])) continue;
     return value;
   }
   return null;
