@@ -30,11 +30,20 @@ npm run publish:url -- "https://m.tb.cn/..."
 npm run publish:url -- --account seller-a "https://www.goofish.com/item?id=..."
 ```
 
+默认发布方式会用 Playwright 打开可见 Chrome，并复用对应账号的本地 profile 登录态。
+
+如果账号对 Playwright 新开的浏览器风控较严格，也可以选择复用当前已经打开并登录闲鱼的 Chrome。先在 Chrome 菜单 `显示 > 开发者 > 允许 Apple 事件中的 JavaScript` 勾选允许，然后执行：
+
+```bash
+npm run publish:url:existing -- --account seller-a "https://www.goofish.com/item?id=..."
+```
+
 自然语言层面也按这个约定使用，例如：
 
 - `用 seller-a 发这个链接`
 - `挂到 2 号账号`
 - `用默认账号发布`
+- `用已经打开的浏览器发布这个链接`
 
 ## 首次使用
 
@@ -79,10 +88,12 @@ skill 应该先返回账号列表，而不是直接进入发布流程。
 - 不传 `--account` 时默认使用 `default`；如果本机已有旧版单账号目录，会继续复用旧目录保证兼容。
 - 登录完成后关闭浏览器，后续发布流程会复用对应账号的本地缓存登录态。
 - 如果还没有这份缓存，先对目标账号执行登录，再执行 `npm run publish:url -- --account <账号名> "<闲鱼链接>"`。
+- 复用已打开浏览器模式不依赖 Playwright profile 登录缓存，而是通过 Chrome Apple Events 操作当前 Chrome；需要已登录闲鱼，并允许 Apple 事件中的 JavaScript。
 
 ## 设计原则
 
 - 不再支持关键词搜索入口
 - 对外仍保持固定发布流程，只额外开放 `--account` 这个账号选择参数
 - 默认走固定处理和固定发布流程
+- 可选支持 `publish:url:existing`，通过 Apple Events 复用当前已打开的 Chrome
 - 底层脚本仍保留，但对外推荐只使用 `publish:url`

@@ -81,7 +81,6 @@ function truncateText(s, maxLen) {
   const border = parseInt(arg('--border', '40'), 10);
   const processedDirArg = arg('--processed-dir');
   const jpgQuality = parseInt(arg('--jpg-quality', '92'), 10);
-
   if (!url) {
     console.error('Missing --url <itemUrl>');
     process.exit(2);
