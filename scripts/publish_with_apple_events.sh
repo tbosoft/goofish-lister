@@ -259,9 +259,10 @@ write_chrome_text_utf8 '(() => {
     const largeRect = c.area >= 300 * 300;
     return largeNatural || largeRect;
   });
+  const sourceImages = large.length ? large : candidates.filter((c) => !c.hidden);
   const filtered = [];
   const seen2 = new Set();
-  for (const c of large) {
+  for (const c of sourceImages) {
     const lower = c.url.toLowerCase();
     const hasExt = /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(lower);
     const hasImgHint = /(img|image|photo|pic|jpeg|jpg|png|webp)/i.test(lower);
@@ -277,12 +278,14 @@ write_chrome_text_utf8 '(() => {
 node -e '
 const fs = require("fs");
 const [imagesFile, outFile] = process.argv.slice(1);
-const urls = fs.readFileSync(imagesFile, "utf8")
+const allUrls = fs.readFileSync(imagesFile, "utf8")
   .split(/\r?\n/)
   .map((x) => x.trim())
   .filter(Boolean)
-  .filter((u) => /img\.alicdn\.com\/bao\/uploaded/i.test(u))
   .filter((u, idx, arr) => arr.indexOf(u) === idx);
+let urls = allUrls.filter((u) => /img\.alicdn\.com\/bao\/uploaded/i.test(u));
+if (!urls.length) urls = allUrls.filter((u) => /img\.alicdn\.com/i.test(u));
+if (!urls.length) urls = allUrls;
 fs.writeFileSync(outFile, urls.join("\n"));
 ' "$IMAGES_FILE" "$IMAGE_URL_LIST_FILE"
 
@@ -507,40 +510,42 @@ fs.writeFileSync(outFile, js);
 ' "$DRAFT_FILE" "$FILL_JS"
 
 if [[ ${#IMAGE_PATHS[@]} -gt 0 ]]; then
-  node -e '
+  UPLOAD_INDEX=0
+  for IMAGE_PATH in "${IMAGE_PATHS[@]}"; do
+    node -e '
 const fs = require("fs");
-const [imageListFile, outFile] = process.argv.slice(1);
-const imagePaths = fs.readFileSync(imageListFile, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-const payloads = imagePaths.map((imagePath) => {
-  const b64 = fs.readFileSync(imagePath, "base64");
-  const name = require("path").basename(imagePath);
-  return { b64, name };
-});
+const [imagePath, outFile] = process.argv.slice(1);
+const b64 = fs.readFileSync(imagePath, "base64");
+const name = require("path").basename(imagePath);
 const js = `(() => {
-  const payloads = ${JSON.stringify(payloads)};
+  const b64 = ${JSON.stringify(b64)};
+  const name = ${JSON.stringify(name)};
   const input = document.querySelector("input[type=file]");
   if (!input) return JSON.stringify({ ok: false, error: "no-file-input" });
+  if (!input.multiple) input.multiple = true;
   const dt = new DataTransfer();
-  for (const payload of payloads) {
-    const bin = atob(payload.b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const file = new File([bytes], payload.name, { type: "image/webp" });
-    dt.items.add(file);
-  }
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const file = new File([bytes], name, { type: "image/webp" });
+  dt.items.add(file);
   input.files = dt.files;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  return JSON.stringify({ ok: true, files: input.files.length });
+  return JSON.stringify({ ok: true, files: input.files.length, name });
 })()`;
 fs.writeFileSync(outFile, js);
-' "$IMAGE_PATH_LIST_FILE" "$UPLOAD_JS"
+' "$IMAGE_PATH" "$UPLOAD_JS"
 
-  osascript \
-    -e "set jsCode to read POSIX file \"$(pwd)/$UPLOAD_JS\"" \
-    -e 'using terms from application "Google Chrome"' \
-    -e 'tell application "Google Chrome" to tell active tab of front window to execute javascript jsCode' \
-    -e 'end using terms from'
+    UPLOAD_RESULT="$(osascript \
+      -e "set jsCode to read POSIX file \"$(pwd)/$UPLOAD_JS\"" \
+      -e 'using terms from application "Google Chrome"' \
+      -e 'tell application "Google Chrome" to tell active tab of front window to execute javascript jsCode' \
+      -e 'end using terms from')"
+    echo "UPLOAD_IMAGE_$UPLOAD_INDEX: $UPLOAD_RESULT"
+    UPLOAD_INDEX=$((UPLOAD_INDEX + 1))
+    sleep 1
+  done
   sleep 4
 fi
 
