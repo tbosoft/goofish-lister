@@ -3,6 +3,7 @@ set -euo pipefail
 
 ACCOUNT="default"
 URL=""
+NO_PUBLISH=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -13,6 +14,10 @@ while [[ $# -gt 0 ]]; do
     --url|-u)
       URL="${2:-}"
       shift 2
+      ;;
+    --no-publish)
+      NO_PUBLISH=1
+      shift
       ;;
     --*)
       echo "Unknown option for Apple Events publish: $1" >&2
@@ -264,13 +269,23 @@ write_chrome_text_utf8 '(() => {
   const seen2 = new Set();
   for (const c of sourceImages) {
     const lower = c.url.toLowerCase();
-    const hasExt = /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(lower);
-    const hasImgHint = /(img|image|photo|pic|jpeg|jpg|png|webp)/i.test(lower);
-    if (!(hasExt || hasImgHint)) continue;
+    if (!/\/bao\/uploaded\//i.test(lower)) continue;
     if (seen2.has(c.url)) continue;
     seen2.add(c.url);
     filtered.push(c.url);
     if (filtered.length >= maxImages) break;
+  }
+  if (!filtered.length) {
+    for (const c of sourceImages) {
+      const lower = c.url.toLowerCase();
+      const hasExt = /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(lower);
+      const hasImgHint = /(img|image|photo|pic|jpeg|jpg|png|webp)/i.test(lower);
+      if (!(hasExt || hasImgHint)) continue;
+      if (seen2.has(c.url)) continue;
+      seen2.add(c.url);
+      filtered.push(c.url);
+      if (filtered.length >= maxImages) break;
+    }
   }
   return filtered.join("\n");
 })()' "$IMAGES_FILE"
@@ -290,7 +305,7 @@ fs.writeFileSync(outFile, urls.join("\n"));
 ' "$IMAGES_FILE" "$IMAGE_URL_LIST_FILE"
 
 IMAGE_PATHS=()
-while IFS= read -r IMAGE_URL; do
+while IFS= read -r IMAGE_URL || [[ -n "$IMAGE_URL" ]]; do
   [[ -z "$IMAGE_URL" ]] && continue
   IMAGE_PATH="$WORK_DIR/image-${#IMAGE_PATHS[@]}.webp"
   curl -L -o "$IMAGE_PATH" "$IMAGE_URL"
@@ -334,7 +349,103 @@ let start = title ? lines.findIndex((line) => title.replace(/[_\-\s]*闲鱼\s*$/
 if (start < 0) start = 0;
 let end = lines.findIndex((line, idx) => idx > start && /^(聊一聊|立即购买|收藏|为你推荐)$/.test(line));
 if (end < 0) end = Math.min(lines.length, start + 20);
-const description = descText || lines.slice(start, end).join("\n");
+function cleanLines(text) {
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+function cleanTitle(t) {
+  return String(t || "").replace(/[_\-\s]*闲鱼\s*$/u, "").trim();
+}
+function takeCoreSectionLines(body, listingTitle) {
+  const rawLines = cleanLines(body);
+  const t = cleanTitle(listingTitle);
+  let startIdx = 0;
+  if (t) {
+    const idx = rawLines.findIndex((l) => l.includes(t) || t.includes(l));
+    if (idx !== -1) startIdx = idx;
+  }
+  if (startIdx === 0 && rawLines.length > 5) {
+    for (let i = 0; i < Math.min(rawLines.length, 30); i++) {
+      if (/^\d+浏览$/.test(rawLines[i]) || /^\d+人想要$/.test(rawLines[i])) {
+        startIdx = i + 1;
+      }
+    }
+  }
+  let endIdx = rawLines.length;
+  const endMarkers = ["为你推荐", "发闲置", "消息", "商品码", "客服", "回顶部", "© Goofish.com", "闲鱼社区", "统一社会信用代码", "增值电信业务", "你可能还想找", "相关推荐", "猜你喜欢"];
+  for (let i = startIdx; i < rawLines.length; i++) {
+    if (endMarkers.some((m) => rawLines[i].includes(m))) {
+      endIdx = i;
+      break;
+    }
+  }
+  const uiNoiseExact = new Set(["展开", "聊一聊", "立即购买", "收藏", "举报", "担保交易", "搜索", "网页版", "闲鱼号", "关注"]);
+  const uiNoisePatterns = [
+    /^搜索/,
+    /^网页版/,
+    /来闲鱼\d+天/,
+    /卖出\d+件/,
+    /好评率\d+/,
+    /^\d+分钟前来过$/,
+    /^\d+小时前来过$/,
+    /^\d+天前来过$/,
+    /^刚刚来过$/,
+    /^\d+人想要$/,
+    /^\d+浏览$/,
+    /^¥\s*$/,
+    /^[0-9]+(?:\.[0-9]+)?$/,
+    /^[.。·,，:：;；-]+$/,
+    /^包邮$/,
+    /^小刀价$/,
+    /^回头客超\d+%/,
+    /^卖家信用/,
+    /^为你推荐/,
+    /^你可能还想找/,
+    /^相关推荐/,
+    /^猜你喜欢/,
+    /^更多商品/,
+    /^更多宝贝/,
+    /^相似商品/,
+    /^同款/,
+    /^统一社会信用代码/,
+    /^增值电信/,
+    /^营业性演出/,
+    /^广播电视/,
+    /^网络食品/,
+    /^集邮市场/,
+    /^APP备案号/,
+    /^浙公网安备/,
+    /^电子营业执照/,
+    /^闲鱼社区/,
+    /^软件许可协议/,
+    /^闲鱼规则/,
+    /^意见征集/,
+    /^算法备案/
+  ];
+  let sawPriceFragment = false;
+  const core = rawLines.slice(startIdx, endIdx)
+    .filter((line) => !uiNoiseExact.has(line))
+    .filter((line) => {
+      const isNoise = uiNoisePatterns.some((re) => re.test(line));
+      if (/^¥\s*$/.test(line) || /^[0-9]+(?:\.[0-9]+)?$/.test(line) || /^[.。·,，:：;；-]+$/.test(line)) {
+        sawPriceFragment = true;
+      }
+      if (isNoise) return false;
+      if (sawPriceFragment && line.length <= 12 && !/[。！？!?~～]|我想要|感兴趣|链接|网盘|发货|下单|拍/u.test(line)) return false;
+      return true;
+    })
+    .filter((line) => !/^#\s*/.test(line))
+    .filter((line) => !/^\d{1,2}$/.test(line));
+  while (core.length && (/^(\d+\s*人想要|\d+\s*浏览|¥\s*$|[0-9]+(?:\.[0-9]+)?$|包邮|小刀价)$/u.test(core[0]) || core[0].length <= 2)) {
+    core.shift();
+  }
+  return core;
+}
+const descLines = takeCoreSectionLines(descText || lines.slice(start, end).join("\n"), title);
+const description = descLines.join("\n");
 const out = {
   url,
   fetchedAt: new Date().toISOString(),
@@ -510,78 +621,45 @@ fs.writeFileSync(outFile, js);
 ' "$DRAFT_FILE" "$FILL_JS"
 
 if [[ ${#IMAGE_PATHS[@]} -gt 0 ]]; then
-  UPLOAD_INDEX=0
-  for IMAGE_PATH in "${IMAGE_PATHS[@]}"; do
-    node -e '
+  node -e '
 const fs = require("fs");
-const [imagePath, outFile] = process.argv.slice(1);
-const b64 = fs.readFileSync(imagePath, "base64");
-const name = require("path").basename(imagePath);
+const [imageListFile, outFile] = process.argv.slice(1);
+const imagePaths = fs.readFileSync(imageListFile, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+const payloads = imagePaths.map((imagePath) => ({
+  b64: fs.readFileSync(imagePath, "base64"),
+  name: require("path").basename(imagePath)
+}));
 const js = `(() => {
-  const b64 = ${JSON.stringify(b64)};
-  const name = ${JSON.stringify(name)};
-  function visible(el) {
-    if (!el) return false;
-    const style = getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
-  function collectFileInputs(root, out, seen) {
-    if (!root) return;
-    const inputs = root.querySelectorAll ? Array.from(root.querySelectorAll("input[type=file]")) : [];
-    for (const input of inputs) {
-      if (seen.has(input)) continue;
-      seen.add(input);
-      out.push(input);
-    }
-    const all = root.querySelectorAll ? Array.from(root.querySelectorAll("*")) : [];
-    for (const el of all) {
-      if (el.shadowRoot) collectFileInputs(el.shadowRoot, out, seen);
-      if (el.tagName === "IFRAME") {
-        try {
-          const doc = el.contentDocument;
-          if (doc) collectFileInputs(doc, out, seen);
-        } catch {}
-      }
-    }
-  }
-  const inputs = [];
-  collectFileInputs(document, inputs, new Set());
-  const input =
-    inputs.find((el) => /image/i.test(el.accept || "") && (el.multiple || el.closest("[class*=upload],[class*=Upload]"))) ||
-    inputs.find((el) => /image/i.test(el.accept || "")) ||
-    inputs.find((el) => el.multiple) ||
-    inputs.find(visible) ||
-    inputs[0];
-  if (!input) return JSON.stringify({ ok: false, error: "no-file-input", inputs: inputs.length });
+  const payloads = ${JSON.stringify(payloads)};
+  const input = document.querySelector("input[type=file]");
+  if (!input) return JSON.stringify({ ok: false, error: "no-file-input" });
   if (!input.multiple) input.multiple = true;
   const dt = new DataTransfer();
-  try {
-    for (const file of Array.from(input.files || [])) dt.items.add(file);
-  } catch {}
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const file = new File([bytes], name, { type: "image/webp" });
-  dt.items.add(file);
+  for (const payload of payloads) {
+    const bin = atob(payload.b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    dt.items.add(new File([bytes], payload.name, { type: "image/webp" }));
+  }
   input.files = dt.files;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  return JSON.stringify({ ok: true, files: input.files.length, name, inputs: inputs.length });
+  const previewCount = Array.from(document.images || []).filter((img) => {
+    const src = img.currentSrc || img.src || "";
+    const box = img.closest("[class*=upload],[class*=Upload],[class*=image],[class*=Image]");
+    return box && src;
+  }).length;
+  return JSON.stringify({ ok: true, files: input.files.length, names: Array.from(input.files).map((f) => f.name), previewCount });
 })()`;
 fs.writeFileSync(outFile, js);
-' "$IMAGE_PATH" "$UPLOAD_JS"
+' "$IMAGE_PATH_LIST_FILE" "$UPLOAD_JS"
 
-    UPLOAD_RESULT="$(osascript \
-      -e "set jsCode to read POSIX file \"$(pwd)/$UPLOAD_JS\"" \
-      -e 'using terms from application "Google Chrome"' \
-      -e 'tell application "Google Chrome" to tell active tab of front window to execute javascript jsCode' \
-      -e 'end using terms from')"
-    echo "UPLOAD_IMAGE_$UPLOAD_INDEX: $UPLOAD_RESULT"
-    UPLOAD_INDEX=$((UPLOAD_INDEX + 1))
-    sleep 2
-  done
+  UPLOAD_RESULT="$(osascript \
+    -e "set jsCode to read POSIX file \"$(pwd)/$UPLOAD_JS\"" \
+    -e 'using terms from application "Google Chrome"' \
+    -e 'tell application "Google Chrome" to tell active tab of front window to execute javascript jsCode' \
+    -e 'end using terms from')"
+  echo "UPLOAD_IMAGES: $UPLOAD_RESULT"
   sleep 4
 fi
 
@@ -592,8 +670,12 @@ osascript \
   -e 'end using terms from'
 sleep 1
 
-PUBLISH_RESULT="$(run_chrome_js '(() => { const publishText = "\u53d1\u5e03"; const btn = Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => (el.innerText||"").trim() === publishText && String(el.className||"").includes("publish-button")) || Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => (el.innerText||"").trim() === publishText); if (!btn) return "NO_BUTTON"; btn.click(); return "CLICKED"; })()')"
-echo "PUBLISH_CLICK: $PUBLISH_RESULT"
-sleep 3
+if [[ "$NO_PUBLISH" == "1" ]]; then
+  echo "NO_PUBLISH: skipped publish click"
+else
+  PUBLISH_RESULT="$(run_chrome_js '(() => { const publishText = "\u53d1\u5e03"; const btn = Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => (el.innerText||"").trim() === publishText && String(el.className||"").includes("publish-button")) || Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => (el.innerText||"").trim() === publishText); if (!btn) return "NO_BUTTON"; btn.click(); return "CLICKED"; })()')"
+  echo "PUBLISH_CLICK: $PUBLISH_RESULT"
+  sleep 3
+fi
 echo "FINAL_URL: $(run_chrome_js 'location.href')"
 echo "APPLE_EVENTS_PIPELINE_DONE: account=$ACCOUNT source=$FINAL_URL draft=$DRAFT_FILE"
