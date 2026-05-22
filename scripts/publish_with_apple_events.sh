@@ -47,6 +47,8 @@ URL_FILE="$WORK_DIR/url.txt"
 BODY_FILE="$WORK_DIR/body.txt"
 DESCRIPTION_FILE="$WORK_DIR/description.txt"
 IMAGES_FILE="$WORK_DIR/images.txt"
+IMAGE_URL_LIST_FILE="$WORK_DIR/image-urls.txt"
+IMAGE_PATH_LIST_FILE="$WORK_DIR/image-paths.txt"
 ASSETS_FILE="$WORK_DIR/listing-assets.json"
 DRAFT_LOG="$WORK_DIR/draft.log"
 FILL_JS="$WORK_DIR/fill_publish.js"
@@ -198,32 +200,117 @@ write_chrome_text_utf8 '(() => {
   descCandidates.sort((a, b) => b.score - a.score || b.text.length - a.text.length);
   return descCandidates[0]?.text || cleanText(ogDesc || metaDesc || "");
 })()' "$DESCRIPTION_FILE"
-write_chrome_text_utf8 'Array.from(document.images).map(img=>img.currentSrc||img.src).filter(Boolean).join("\n")' "$IMAGES_FILE"
+write_chrome_text_utf8 '(() => {
+  const maxImages = 30;
+  const seen = new Set();
+  const candidates = [];
+  let order = 0;
+  function normUrl(u) {
+    const s = String(u || "").trim();
+    if (!s || s.startsWith("data:")) return "";
+    try {
+      return new URL(s, location.href).href;
+    } catch {
+      return s;
+    }
+  }
+  function safeNum(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function visible(img) {
+    if (!img) return false;
+    const style = getComputedStyle(img);
+    if (style.display === "none" || style.visibility === "hidden" || img.getAttribute("aria-hidden") === "true") return false;
+    return true;
+  }
+  function pushImg(img, source) {
+    const url = normUrl(img?.currentSrc || img?.src || img?.getAttribute?.("data-src"));
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    const rect = img?.getBoundingClientRect?.() || { width: 0, height: 0 };
+    const naturalWidth = safeNum(img?.naturalWidth);
+    const naturalHeight = safeNum(img?.naturalHeight);
+    const area = safeNum(rect.width) * safeNum(rect.height);
+    candidates.push({
+      order: order++,
+      url,
+      source,
+      hidden: !visible(img),
+      naturalWidth,
+      naturalHeight,
+      area
+    });
+  }
+  const mainWindow = document.querySelector("[class*=\"item-main-window\"]");
+  if (mainWindow) {
+    for (const img of Array.from(mainWindow.querySelectorAll("img"))) pushImg(img, "mainWindow.img");
+  }
+  const carousel = document.querySelector("[class*=\"carousel\"]");
+  if (carousel) {
+    for (const img of Array.from(carousel.querySelectorAll("img"))) pushImg(img, "carousel.img");
+  }
+  if (candidates.length < 2) {
+    for (const img of Array.from(document.images || [])) pushImg(img, "document.images");
+  }
+  const large = candidates.filter((c) => {
+    if (c.hidden) return false;
+    const largeNatural = c.naturalWidth >= 300 && c.naturalHeight >= 300;
+    const largeRect = c.area >= 300 * 300;
+    return largeNatural || largeRect;
+  });
+  const filtered = [];
+  const seen2 = new Set();
+  for (const c of large) {
+    const lower = c.url.toLowerCase();
+    const hasExt = /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(lower);
+    const hasImgHint = /(img|image|photo|pic|jpeg|jpg|png|webp)/i.test(lower);
+    if (!(hasExt || hasImgHint)) continue;
+    if (seen2.has(c.url)) continue;
+    seen2.add(c.url);
+    filtered.push(c.url);
+    if (filtered.length >= maxImages) break;
+  }
+  return filtered.join("\n");
+})()' "$IMAGES_FILE"
 
-IMAGE_URL="$(awk '/img\.alicdn\.com\/bao\/uploaded/ && /790x10000/ { print; exit }' "$IMAGES_FILE")"
-if [[ -z "$IMAGE_URL" ]]; then
-  IMAGE_URL="$(awk '/img\.alicdn\.com\/bao\/uploaded/ { print; exit }' "$IMAGES_FILE")"
-fi
+node -e '
+const fs = require("fs");
+const [imagesFile, outFile] = process.argv.slice(1);
+const urls = fs.readFileSync(imagesFile, "utf8")
+  .split(/\r?\n/)
+  .map((x) => x.trim())
+  .filter(Boolean)
+  .filter((u) => /img\.alicdn\.com\/bao\/uploaded/i.test(u))
+  .filter((u, idx, arr) => arr.indexOf(u) === idx);
+fs.writeFileSync(outFile, urls.join("\n"));
+' "$IMAGES_FILE" "$IMAGE_URL_LIST_FILE"
 
-IMAGE_PATH=""
-if [[ -n "$IMAGE_URL" ]]; then
-  IMAGE_PATH="$WORK_DIR/main.webp"
+IMAGE_PATHS=()
+while IFS= read -r IMAGE_URL; do
+  [[ -z "$IMAGE_URL" ]] && continue
+  IMAGE_PATH="$WORK_DIR/image-${#IMAGE_PATHS[@]}.webp"
   curl -L -o "$IMAGE_PATH" "$IMAGE_URL"
-fi
+  IMAGE_PATHS+=("$IMAGE_PATH")
+done < "$IMAGE_URL_LIST_FILE"
+printf '%s\n' "${IMAGE_PATHS[@]}" > "$IMAGE_PATH_LIST_FILE"
 
 TITLE="$(cat "$TITLE_FILE")"
 FINAL_URL="$(cat "$URL_FILE")"
 
 node -e '
 const fs = require("fs");
-const [assetsFile, titleFile, urlFile, bodyFile, descFile, imagePath, imageUrl] = process.argv.slice(1);
+const [assetsFile, titleFile, urlFile, bodyFile, descFile, imageListFile] = process.argv.slice(1);
 const title = fs.readFileSync(titleFile, "utf8").trim();
 const url = fs.readFileSync(urlFile, "utf8").trim();
 const bodyText = fs.readFileSync(bodyFile, "utf8").trim();
 const descText = fs.existsSync(descFile) ? fs.readFileSync(descFile, "utf8").trim() : "";
-const image = imagePath ? {
-  order: 0,
-  url: imageUrl || null,
+const imagePaths = fs.existsSync(imageListFile)
+  ? fs.readFileSync(imageListFile, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
+  : [];
+const images = imagePaths.map((imagePath, order) => ({
+  order,
+  url: null,
   alt: null,
   source: "chrome-apple-events",
   width: null,
@@ -238,7 +325,7 @@ const image = imagePath ? {
   processedStatus: "ok",
   processedError: null,
   processedBytes: fs.existsSync(imagePath) ? fs.statSync(imagePath).size : null
-} : null;
+}));
 const lines = bodyText.split(/\n/).map((x) => x.trim()).filter(Boolean);
 let start = title ? lines.findIndex((line) => title.replace(/[_\-\s]*闲鱼\s*$/u, "").includes(line) || line.includes(title.replace(/[_\-\s]*闲鱼\s*$/u, ""))) : -1;
 if (start < 0) start = 0;
@@ -251,19 +338,19 @@ const out = {
   title,
   description,
   bodyText,
-  images: image ? [image] : [],
-  processedDir: imagePath ? require("path").dirname(imagePath) : null,
+  images,
+  processedDir: imagePaths.length ? require("path").dirname(imagePaths[0]) : null,
   meta: {
     schemaVersion: "goofish-lister.output.v1",
     tool: "goofish-lister",
     script: "scripts/publish_with_apple_events.sh",
     generatedAt: new Date().toISOString(),
     inputs: { browser: "chrome-apple-events" },
-    counts: { images: image ? 1 : 0 }
+    counts: { images: images.length }
   }
 };
 fs.writeFileSync(assetsFile, JSON.stringify(out, null, 2));
-' "$ASSETS_FILE" "$TITLE_FILE" "$URL_FILE" "$BODY_FILE" "$DESCRIPTION_FILE" "$IMAGE_PATH" "$IMAGE_URL"
+' "$ASSETS_FILE" "$TITLE_FILE" "$URL_FILE" "$BODY_FILE" "$DESCRIPTION_FILE" "$IMAGE_PATH_LIST_FILE"
 
 node scripts/generate_draft.js \
   --in "$ASSETS_FILE" \
@@ -419,29 +506,35 @@ const js = `(() => {
 fs.writeFileSync(outFile, js);
 ' "$DRAFT_FILE" "$FILL_JS"
 
-if [[ -n "$IMAGE_PATH" ]]; then
+if [[ ${#IMAGE_PATHS[@]} -gt 0 ]]; then
   node -e '
 const fs = require("fs");
-const [imagePath, outFile] = process.argv.slice(1);
-const b64 = fs.readFileSync(imagePath, "base64");
-const name = require("path").basename(imagePath);
+const [imageListFile, outFile] = process.argv.slice(1);
+const imagePaths = fs.readFileSync(imageListFile, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+const payloads = imagePaths.map((imagePath) => {
+  const b64 = fs.readFileSync(imagePath, "base64");
+  const name = require("path").basename(imagePath);
+  return { b64, name };
+});
 const js = `(() => {
-  const b64 = ${JSON.stringify(b64)};
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const file = new File([bytes], ${JSON.stringify(name)}, { type: "image/webp" });
+  const payloads = ${JSON.stringify(payloads)};
   const input = document.querySelector("input[type=file]");
   if (!input) return JSON.stringify({ ok: false, error: "no-file-input" });
   const dt = new DataTransfer();
-  dt.items.add(file);
+  for (const payload of payloads) {
+    const bin = atob(payload.b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const file = new File([bytes], payload.name, { type: "image/webp" });
+    dt.items.add(file);
+  }
   input.files = dt.files;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  return JSON.stringify({ ok: true, files: input.files.length, name: input.files[0]?.name, size: input.files[0]?.size });
+  return JSON.stringify({ ok: true, files: input.files.length });
 })()`;
 fs.writeFileSync(outFile, js);
-' "$IMAGE_PATH" "$UPLOAD_JS"
+' "$IMAGE_PATH_LIST_FILE" "$UPLOAD_JS"
 
   osascript \
     -e "set jsCode to read POSIX file \"$(pwd)/$UPLOAD_JS\"" \
