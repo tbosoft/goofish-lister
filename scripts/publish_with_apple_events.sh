@@ -45,6 +45,7 @@ mkdir -p "$WORK_DIR"
 TITLE_FILE="$WORK_DIR/title.txt"
 URL_FILE="$WORK_DIR/url.txt"
 BODY_FILE="$WORK_DIR/body.txt"
+DESCRIPTION_FILE="$WORK_DIR/description.txt"
 IMAGES_FILE="$WORK_DIR/images.txt"
 ASSETS_FILE="$WORK_DIR/listing-assets.json"
 DRAFT_LOG="$WORK_DIR/draft.log"
@@ -94,6 +95,109 @@ fs.writeFileSync(outFile, Buffer.from(b64, "base64"));
 write_chrome_text_utf8 'document.title' "$TITLE_FILE"
 write_chrome_text_utf8 'location.href' "$URL_FILE"
 write_chrome_text_utf8 'document.body.innerText' "$BODY_FILE"
+write_chrome_text_utf8 '(() => {
+  function cleanText(txt) {
+    return String(txt || "")
+      .replace(/\s+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  function isNoiseText(txt) {
+    const s = cleanText(txt);
+    if (!s) return true;
+    const lines = s.split(/\n+/).map((x) => x.trim()).filter(Boolean);
+    if (!lines.length) return true;
+    const joined = lines.join(" | ");
+    const noiseRes = [
+      /^\d+人想要$/,
+      /^\d+浏览$/,
+      /^卖家信用/,
+      /^回头客超\d+%/,
+      /^为你推荐/,
+      /^你可能还想找/,
+      /^相关推荐/,
+      /^猜你喜欢/,
+      /^更多商品/,
+      /^更多宝贝/,
+      /^相似商品/,
+      /^同款/,
+      /^聊一聊$/,
+      /^立即购买$/,
+      /^收藏$/,
+      /^举报$/,
+      /^担保交易$/,
+      /^小刀价$/,
+      /^包邮$/,
+      /^¥\s*$/,
+      /^[0-9]+(?:\.[0-9]+)?$/
+    ];
+    const noisyLines = lines.filter((line) => noiseRes.some((re) => re.test(line)));
+    if (noisyLines.length >= Math.max(2, Math.ceil(lines.length * 0.5))) return true;
+    if (/卖家信用|人想要|浏览|为你推荐|猜你喜欢|相关推荐/.test(joined)) return true;
+    return false;
+  }
+  function safeNum(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  function scoreDescCandidate(el) {
+    if (!el) return -1;
+    const txt = cleanText(el.innerText || el.textContent || "");
+    if (!txt || isNoiseText(txt)) return -1;
+    const rect = el.getBoundingClientRect?.() || { width: 0, height: 0, top: 0 };
+    const area = safeNum(rect.width) * safeNum(rect.height);
+    let score = 0;
+    score += Math.min(txt.length, 4000);
+    score += Math.min(area / 20, 3000);
+    const cls = String(el.className || "");
+    if (/desc|detail|content|introduc|article|rich/i.test(cls)) score += 1500;
+    if (rect.top > 0 && rect.top < 2200) score += 600;
+    if (txt.includes("\n")) score += 300;
+    if (txt.length < 20) score -= 2000;
+    return score;
+  }
+  const metaDesc = document.querySelector("meta[name=\"description\"]")?.getAttribute("content") || "";
+  const ogDesc = document.querySelector("meta[property=\"og:description\"]")?.getAttribute("content") || "";
+  const detailRoots = [
+    document.querySelector("[class*=\"item-main-window\"]"),
+    document.querySelector("main"),
+    document.querySelector("[class*=\"detail\"]"),
+    document.querySelector("[class*=\"content\"]")
+  ].filter(Boolean);
+  const descCandidates = [];
+  const pushed = new Set();
+  function pushDescCandidate(el, source) {
+    if (!el || pushed.has(el)) return;
+    pushed.add(el);
+    const text = cleanText(el.innerText || el.textContent || "");
+    if (!text || isNoiseText(text)) return;
+    descCandidates.push({ source, text, score: scoreDescCandidate(el) });
+  }
+  for (const root of detailRoots) {
+    pushDescCandidate(root, "detailRoot");
+    const selectors = [
+      "[class*=\"desc--\"]",
+      "[class*=\"desc\"]",
+      "[class*=\"detail\"]",
+      "[class*=\"content\"]",
+      "[class*=\"introduc\"]",
+      "[class*=\"article\"]",
+      "section",
+      "article",
+      "div"
+    ];
+    for (const sel of selectors) {
+      for (const el of Array.from(root.querySelectorAll(sel)).slice(0, 120)) {
+        pushDescCandidate(el, `root:${sel}`);
+      }
+    }
+  }
+  for (const el of Array.from(document.querySelectorAll("[class*=\"desc--\"], [class*=\"desc\"], [class*=\"detail\"], [class*=\"content\"], article, section")).slice(0, 200)) {
+    pushDescCandidate(el, "pageScoped");
+  }
+  descCandidates.sort((a, b) => b.score - a.score || b.text.length - a.text.length);
+  return descCandidates[0]?.text || cleanText(ogDesc || metaDesc || "");
+})()' "$DESCRIPTION_FILE"
 write_chrome_text_utf8 'Array.from(document.images).map(img=>img.currentSrc||img.src).filter(Boolean).join("\n")' "$IMAGES_FILE"
 
 IMAGE_URL="$(awk '/img\.alicdn\.com\/bao\/uploaded/ && /790x10000/ { print; exit }' "$IMAGES_FILE")"
@@ -112,10 +216,11 @@ FINAL_URL="$(cat "$URL_FILE")"
 
 node -e '
 const fs = require("fs");
-const [assetsFile, titleFile, urlFile, bodyFile, imagePath, imageUrl] = process.argv.slice(1);
+const [assetsFile, titleFile, urlFile, bodyFile, descFile, imagePath, imageUrl] = process.argv.slice(1);
 const title = fs.readFileSync(titleFile, "utf8").trim();
 const url = fs.readFileSync(urlFile, "utf8").trim();
 const bodyText = fs.readFileSync(bodyFile, "utf8").trim();
+const descText = fs.existsSync(descFile) ? fs.readFileSync(descFile, "utf8").trim() : "";
 const image = imagePath ? {
   order: 0,
   url: imageUrl || null,
@@ -139,7 +244,7 @@ let start = title ? lines.findIndex((line) => title.replace(/[_\-\s]*闲鱼\s*$/
 if (start < 0) start = 0;
 let end = lines.findIndex((line, idx) => idx > start && /^(聊一聊|立即购买|收藏|为你推荐)$/.test(line));
 if (end < 0) end = Math.min(lines.length, start + 20);
-const description = lines.slice(start, end).join("\n");
+const description = descText || lines.slice(start, end).join("\n");
 const out = {
   url,
   fetchedAt: new Date().toISOString(),
@@ -158,7 +263,7 @@ const out = {
   }
 };
 fs.writeFileSync(assetsFile, JSON.stringify(out, null, 2));
-' "$ASSETS_FILE" "$TITLE_FILE" "$URL_FILE" "$BODY_FILE" "$IMAGE_PATH" "$IMAGE_URL"
+' "$ASSETS_FILE" "$TITLE_FILE" "$URL_FILE" "$BODY_FILE" "$DESCRIPTION_FILE" "$IMAGE_PATH" "$IMAGE_URL"
 
 node scripts/generate_draft.js \
   --in "$ASSETS_FILE" \
