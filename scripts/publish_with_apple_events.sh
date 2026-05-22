@@ -253,6 +253,54 @@ const js = `(() => {
     if (exact.matches("[contenteditable=true]")) return setEditable(exact, text);
     return setInputLike(exact, text);
   }
+  function fillFirstInput(selectors, text) {
+    for (const selector of selectors) {
+      const el = Array.from(document.querySelectorAll(selector)).find(visible);
+      if (el && setInputLike(el, text)) return true;
+    }
+    return false;
+  }
+  function scorePriceInput(el, idx) {
+    const ctx = contextText(el);
+    const id = el.id || "";
+    const name = el.name || "";
+    const cls = el.className || "";
+    const placeholder = el.placeholder || "";
+    const aria = el.getAttribute("aria-label") || "";
+    const type = el.type || "";
+    const inputMode = el.getAttribute("inputmode") || "";
+    let score = 0;
+    if (id === "itemPriceDTO_priceInCent") score += 600;
+    if (/price/i.test(id) || /price/i.test(name)) score += 100;
+    if (/ant-input-number-input/.test(cls) && priceRe.test(ctx)) score += 120;
+    if (priceRe.test(ctx)) score += 80;
+    if (/\\u539f\\u4ef7/.test(ctx)) score -= 260;
+    if (priceRe.test(placeholder) || /0\\.00|\\d+\\.\\d+/.test(placeholder)) score += 35;
+    if (priceRe.test(aria)) score += 35;
+    if (type === "number" || /decimal|numeric/.test(inputMode)) score += 15;
+    if (el.disabled || el.readOnly) score -= 300;
+    score -= idx * 0.01;
+    return score;
+  }
+  function fillPrice(text) {
+    const exactSelectors = [
+      ".ant-form-item:has(label[for='itemPriceDTO_priceInCent']) input",
+      ".ant-form-item:has(.ant-form-item-label label[title='\\u4ef7\\u683c']) input",
+      ".ant-form-item:has(.ant-form-item-label) .ant-input-number-input",
+      "input#itemPriceDTO_priceInCent",
+      "input[name*=price i]",
+      "input[id*=price i]"
+    ];
+    if (fillFirstInput(exactSelectors, text)) return true;
+    if (fillByContext("input", priceRe, text)) return true;
+
+    const candidates = Array.from(document.querySelectorAll("input")).filter(visible)
+      .map((el, idx) => ({ el, score: scorePriceInput(el, idx) }))
+      .sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+    if (!best || best.score < 20) return false;
+    return setInputLike(best.el, text);
+  }
   const titleOk = title ? (
     fillByContext("input,textarea,[contenteditable=true]", titleRe, title)
   ) : false;
@@ -260,7 +308,7 @@ const js = `(() => {
   const descOk =
     fillByContext("textarea,[contenteditable=true]", descRe, description) ||
     (fallbackEditable ? setEditable(fallbackEditable, description) : false);
-  const priceOk = price ? fillByContext("input", priceRe, price) : false;
+  const priceOk = price ? fillPrice(price) : false;
   return JSON.stringify({ ok: true, titleOk, descOk, priceOk, titleChars: title.length, descriptionChars: description.length, price });
 })()`;
 fs.writeFileSync(outFile, js);
