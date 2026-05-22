@@ -520,10 +520,46 @@ const name = require("path").basename(imagePath);
 const js = `(() => {
   const b64 = ${JSON.stringify(b64)};
   const name = ${JSON.stringify(name)};
-  const input = document.querySelector("input[type=file]");
-  if (!input) return JSON.stringify({ ok: false, error: "no-file-input" });
+  function visible(el) {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+  function collectFileInputs(root, out, seen) {
+    if (!root) return;
+    const inputs = root.querySelectorAll ? Array.from(root.querySelectorAll("input[type=file]")) : [];
+    for (const input of inputs) {
+      if (seen.has(input)) continue;
+      seen.add(input);
+      out.push(input);
+    }
+    const all = root.querySelectorAll ? Array.from(root.querySelectorAll("*")) : [];
+    for (const el of all) {
+      if (el.shadowRoot) collectFileInputs(el.shadowRoot, out, seen);
+      if (el.tagName === "IFRAME") {
+        try {
+          const doc = el.contentDocument;
+          if (doc) collectFileInputs(doc, out, seen);
+        } catch {}
+      }
+    }
+  }
+  const inputs = [];
+  collectFileInputs(document, inputs, new Set());
+  const input =
+    inputs.find((el) => /image/i.test(el.accept || "") && (el.multiple || el.closest("[class*=upload],[class*=Upload]"))) ||
+    inputs.find((el) => /image/i.test(el.accept || "")) ||
+    inputs.find((el) => el.multiple) ||
+    inputs.find(visible) ||
+    inputs[0];
+  if (!input) return JSON.stringify({ ok: false, error: "no-file-input", inputs: inputs.length });
   if (!input.multiple) input.multiple = true;
   const dt = new DataTransfer();
+  try {
+    for (const file of Array.from(input.files || [])) dt.items.add(file);
+  } catch {}
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -532,7 +568,7 @@ const js = `(() => {
   input.files = dt.files;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  return JSON.stringify({ ok: true, files: input.files.length, name });
+  return JSON.stringify({ ok: true, files: input.files.length, name, inputs: inputs.length });
 })()`;
 fs.writeFileSync(outFile, js);
 ' "$IMAGE_PATH" "$UPLOAD_JS"
@@ -544,7 +580,7 @@ fs.writeFileSync(outFile, js);
       -e 'end using terms from')"
     echo "UPLOAD_IMAGE_$UPLOAD_INDEX: $UPLOAD_RESULT"
     UPLOAD_INDEX=$((UPLOAD_INDEX + 1))
-    sleep 1
+    sleep 2
   done
   sleep 4
 fi
