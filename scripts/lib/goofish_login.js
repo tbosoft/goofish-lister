@@ -71,8 +71,8 @@ function getReloginRequiredMessage(userDataDir = getGoofishUserDataDir(), accoun
 
 async function maybeClickQuickEnter(page, options = {}) {
   const {
-    timeoutMs = 3500,
-    afterClickWaitMs = 1200,
+    timeoutMs = 8000,
+    afterClickWaitMs = 1800,
     verbose = false,
   } = options;
 
@@ -80,40 +80,78 @@ async function maybeClickQuickEnter(page, options = {}) {
     return false;
   }
 
-  const buttonTexts = ['快速进入', '立即进入', '进入闲鱼', '进入'];
-  const popupHints = ['快速进入', '立即进入', '闲鱼', '欢迎回来', '继续访问'];
+  const buttonTexts = ['快速进入', '立即进入', '进入闲鱼', '进入', '继续访问'];
+  const popupHints = ['快速进入', '立即进入', '闲鱼', '欢迎回来', '继续访问', '弹窗'];
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     try {
-      const candidates = [
-        page.getByRole('button', { name: /快速进入|立即进入|进入闲鱼|继续访问|进入/i }).first(),
-        page.getByText(/快速进入|立即进入|进入闲鱼|继续访问/, { exact: false }).first(),
-        page.locator('button, div, span').filter({ hasText: /快速进入|立即进入|进入闲鱼|继续访问/ }).first(),
-      ];
+      const frames = [page.mainFrame(), ...page.frames().filter((frame) => frame !== page.mainFrame())];
 
-      for (const locator of candidates) {
-        try {
-          if (await locator.count()) {
+      for (const frame of frames) {
+        const candidates = [
+          frame.getByRole('button', { name: /快速进入|立即进入|进入闲鱼|继续访问|进入/i }).first(),
+          frame.getByText(/快速进入|立即进入|进入闲鱼|继续访问/, { exact: false }).first(),
+          frame.locator('button, [role="button"], a, div, span').filter({ hasText: /快速进入|立即进入|进入闲鱼|继续访问/ }).first(),
+        ];
+
+        for (const locator of candidates) {
+          try {
+            if (!(await locator.count())) continue;
             const target = locator.first();
-            if (await target.isVisible({ timeout: 200 })) {
-              const text = ((await target.innerText().catch(() => '')) || '').trim();
-              const likelyPopup = popupHints.some((hint) => text.includes(hint))
-                || (await page.locator('body').innerText().catch(() => '')).includes('快速进入');
-              const looksLikeButton = !text || buttonTexts.some((label) => text.includes(label));
-              if (likelyPopup || looksLikeButton) {
-                await target.click({ timeout: 1000 });
-                await page.waitForTimeout(afterClickWaitMs);
-                if (verbose) {
-                  console.log('Detected popup and clicked 快速进入.');
-                }
-                return true;
+            if (!(await target.isVisible({ timeout: 200 }).catch(() => false))) continue;
+
+            const text = ((await target.innerText().catch(() => '')) || '').trim();
+            const bodyText = await frame.locator('body').innerText().catch(() => '');
+            const likelyPopup = popupHints.some((hint) => text.includes(hint) || bodyText.includes(hint));
+            const looksLikeButton = !text || buttonTexts.some((label) => text.includes(label));
+            if (!likelyPopup && !looksLikeButton) continue;
+
+            try {
+              await target.click({ timeout: 1000 });
+            } catch {
+              try {
+                await target.click({ timeout: 1000, force: true });
+              } catch {
+                await target.evaluate((el) => el.click());
               }
             }
+
+            await page.waitForTimeout(afterClickWaitMs);
+            if (verbose) {
+              console.log(`Detected popup and clicked 快速进入${frame !== page.mainFrame() ? ' (iframe)' : ''}.`);
+            }
+            return true;
+          } catch {
+            // keep probing other locators
           }
-        } catch {
-          // keep probing other locators
         }
+      }
+
+      const clickedByDomProbe = await page.evaluate(() => {
+        const matcher = /快速进入|立即进入|进入闲鱼|继续访问/;
+        const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'));
+        const visible = (el) => {
+          const style = window.getComputedStyle(el);
+          if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+        for (const node of nodes) {
+          const text = (node.textContent || '').trim();
+          if (!matcher.test(text) || !visible(node)) continue;
+          node.click();
+          return text || true;
+        }
+        return false;
+      }).catch(() => false);
+
+      if (clickedByDomProbe) {
+        await page.waitForTimeout(afterClickWaitMs);
+        if (verbose) {
+          console.log(`Detected popup and clicked 快速进入${typeof clickedByDomProbe === 'string' ? `: ${clickedByDomProbe}` : ''}.`);
+        }
+        return true;
       }
     } catch {
       // noop
