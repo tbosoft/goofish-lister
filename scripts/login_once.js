@@ -9,7 +9,11 @@
 
 const fs = require('fs/promises');
 const { chromium } = require('playwright');
-const { getGoofishUserDataDir, normalizeGoofishAccountName } = require('./lib/goofish_login');
+const {
+  getGoofishUserDataDir,
+  normalizeGoofishAccountName,
+  maybeClickQuickEnter,
+} = require('./lib/goofish_login');
 
 function arg(name, def = null) {
   const idx = process.argv.indexOf(name);
@@ -37,6 +41,7 @@ function arg(name, def = null) {
 
   const page = context.pages()[0] || (await context.newPage());
   await page.goto('https://www.goofish.com/', { waitUntil: 'domcontentloaded', timeout: 0 });
+  await maybeClickQuickEnter(page, { verbose: true });
 
   console.log('Goofish login window opened.');
   console.log(`Account: ${account}`);

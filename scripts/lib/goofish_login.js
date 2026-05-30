@@ -69,10 +69,67 @@ function getReloginRequiredMessage(userDataDir = getGoofishUserDataDir(), accoun
   ].join('\n');
 }
 
+async function maybeClickQuickEnter(page, options = {}) {
+  const {
+    timeoutMs = 3500,
+    afterClickWaitMs = 1200,
+    verbose = false,
+  } = options;
+
+  if (!page || page.isClosed()) {
+    return false;
+  }
+
+  const buttonTexts = ['快速进入', '立即进入', '进入闲鱼', '进入'];
+  const popupHints = ['快速进入', '立即进入', '闲鱼', '欢迎回来', '继续访问'];
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const candidates = [
+        page.getByRole('button', { name: /快速进入|立即进入|进入闲鱼|继续访问|进入/i }).first(),
+        page.getByText(/快速进入|立即进入|进入闲鱼|继续访问/, { exact: false }).first(),
+        page.locator('button, div, span').filter({ hasText: /快速进入|立即进入|进入闲鱼|继续访问/ }).first(),
+      ];
+
+      for (const locator of candidates) {
+        try {
+          if (await locator.count()) {
+            const target = locator.first();
+            if (await target.isVisible({ timeout: 200 })) {
+              const text = ((await target.innerText().catch(() => '')) || '').trim();
+              const likelyPopup = popupHints.some((hint) => text.includes(hint))
+                || (await page.locator('body').innerText().catch(() => '')).includes('快速进入');
+              const looksLikeButton = !text || buttonTexts.some((label) => text.includes(label));
+              if (likelyPopup || looksLikeButton) {
+                await target.click({ timeout: 1000 });
+                await page.waitForTimeout(afterClickWaitMs);
+                if (verbose) {
+                  console.log('Detected popup and clicked 快速进入.');
+                }
+                return true;
+              }
+            }
+          }
+        } catch {
+          // keep probing other locators
+        }
+      }
+    } catch {
+      // noop
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  return false;
+}
+
 module.exports = {
   getGoofishUserDataDir,
   normalizeGoofishAccountName,
   hasCachedLoginProfile,
   getLoginRequiredMessage,
   getReloginRequiredMessage,
+  maybeClickQuickEnter,
 };

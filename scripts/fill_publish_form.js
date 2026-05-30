@@ -17,6 +17,7 @@ const {
   hasCachedLoginProfile,
   getLoginRequiredMessage,
   getReloginRequiredMessage,
+  maybeClickQuickEnter,
 } = require('./lib/goofish_login');
 
 function arg(name, def = null) {
@@ -136,6 +137,7 @@ function composeDescription(title, description, includeTitleInDescription) {
 
   const page = ctx.pages()[0] || (await ctx.newPage());
   await page.goto('https://www.goofish.com/publish', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await maybeClickQuickEnter(page, { verbose: true });
   await page.waitForTimeout(4500);
 
   const pageText = await page.evaluate(() => document.body?.innerText || '');
