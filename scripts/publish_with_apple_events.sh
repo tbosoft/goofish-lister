@@ -673,7 +673,144 @@ sleep 1
 if [[ "$NO_PUBLISH" == "1" ]]; then
   echo "NO_PUBLISH: skipped publish click"
 else
-  PUBLISH_RESULT="$(run_chrome_js '(() => { const publishText = "\u53d1\u5e03"; const btn = Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => (el.innerText||"").trim() === publishText && String(el.className||"").includes("publish-button")) || Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => (el.innerText||"").trim() === publishText); if (!btn) return "NO_BUTTON"; btn.click(); return "CLICKED"; })()')"
+  run_chrome_js '(() => {
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const visible = (el) => {
+      if (!el) return false;
+      const style = getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+    const bodyText = () => (document.body && document.body.innerText) || "";
+    const hasAppOnlyHint = () => /请用\s*APP\s*发布|去\s*APP\s*发布|仅支持\s*APP\s*发布|只支持\s*APP\s*发布|网页版暂不支持发布此分类|请使用闲鱼APP扫码继续发布/u.test(bodyText());
+    const textOf = (el) => ((el?.innerText || el?.textContent || el?.value || "").replace(/\s+/g, " ").trim());
+    const getPublishButton = () =>
+      Array.from(document.querySelectorAll("button,[role=button],div,span"))
+        .filter(visible)
+        .find((el) => (el.innerText || "").trim() === "发布" && String(el.className || "").includes("publish-button")) ||
+      Array.from(document.querySelectorAll("button,[role=button],div,span"))
+        .filter(visible)
+        .find((el) => (el.innerText || "").trim() === "发布");
+    const isDisabled = (el) => {
+      if (!el) return true;
+      return el.getAttribute("aria-disabled") === "true" || !!el.disabled || /\bdisabled\b|\bloading\b/.test(String(el.className || ""));
+    };
+    const clickFirst = (nodes) => {
+      const el = nodes.find(visible);
+      if (!el) return false;
+      el.click();
+      return true;
+    };
+    const openCategoryPicker = () => {
+      const categoryFormItem = Array.from(document.querySelectorAll(".categoryList--lqyn7MJb .ant-form-item, .ant-form-item"))
+        .find((el) => /分类/.test(textOf(el)));
+      const trigger =
+        categoryFormItem?.querySelector(".ant-select-selector, [role=combobox], .ant-select") ||
+        Array.from(document.querySelectorAll(".ant-select-selector, [role=combobox], .ant-select"))
+          .find((el) => visible(el) && /分类|类目|属性规格/.test(textOf(el.closest(".ant-form-item") || el)));
+      if (!trigger || !visible(trigger)) return false;
+      const fire = (type) => trigger.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+      fire("mousedown");
+      fire("mouseup");
+      trigger.click();
+      const input =
+        trigger.matches?.("input") ? trigger :
+        trigger.querySelector?.("input[role=combobox], .ant-select-selection-search-input") ||
+        trigger.closest?.(".ant-select")?.querySelector?.("input[role=combobox], .ant-select-selection-search-input");
+      if (input && visible(input)) {
+        try {
+          input.focus();
+          input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", keyCode: 40, which: 40, bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowDown", code: "ArrowDown", keyCode: 40, which: 40, bubbles: true }));
+        } catch {}
+      }
+      const dropdown = Array.from(document.querySelectorAll(".ant-select-dropdown")).find((el) => visible(el));
+      const selectOpen = !!categoryFormItem?.querySelector(".ant-select-open, .ant-select-focused");
+      return !!dropdown || selectOpen;
+    };
+    const getCurrentCategoryText = () => {
+      const nodes = Array.from(document.querySelectorAll(".ant-form-item,[class*=category],[role=combobox]"))
+        .filter(visible);
+      for (const el of nodes) {
+        const text = ((el.innerText || "").replace(/\s+/g, " ").trim());
+        if (text && /分类|类目|属性规格|闲置/.test(text)) return text;
+      }
+      return "";
+    };
+    const chooseCategory = async (name) => {
+      if (!openCategoryPicker()) return { ok: false, reason: "picker-not-opened" };
+      await wait(800);
+      const exactRe = new RegExp("^\\\\s*" + name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&") + "\\\\s*$");
+      const dropdown = Array.from(document.querySelectorAll(".ant-select-dropdown"))
+        .find((el) => visible(el)) || document;
+      const holder =
+        dropdown.querySelector(".rc-virtual-list-holder") ||
+        dropdown.querySelector(".rc-virtual-list");
+      const findOption = () => Array.from(dropdown.querySelectorAll(".ant-select-item-option,[role=option],.ant-select-item-option-content"))
+        .filter((el) => visible(el));
+      const pickFromVisible = (els) => {
+        return els.find((el) => {
+          const title = (el.getAttribute("title") || "").trim();
+          const text = textOf(el);
+          return exactRe.test(title) || exactRe.test(text) || title.includes(name) || text.includes(name);
+        });
+      };
+      let picked = pickFromVisible(findOption());
+      if (!picked && holder) {
+        const maxScrollTop = Math.max(0, holder.scrollHeight - holder.clientHeight);
+        let attempts = 0;
+        let lastScrollTop = -1;
+        while (!picked && attempts < 40) {
+          const ratio = attempts / 39;
+          holder.scrollTop = Math.round(maxScrollTop * ratio);
+          holder.dispatchEvent(new Event("scroll", { bubbles: true }));
+          await wait(150);
+          picked = pickFromVisible(findOption());
+          if (picked) break;
+          if (holder.scrollTop === lastScrollTop && holder.scrollTop >= maxScrollTop) break;
+          lastScrollTop = holder.scrollTop;
+          attempts += 1;
+        }
+      }
+      if (!picked) return { ok: false, reason: "option-not-found" };
+      picked.click();
+      await wait(300);
+      clickFirst(
+        Array.from(document.querySelectorAll("button,[role=button],div,span"))
+          .filter((el) => /确定|完成|确认/.test((el.innerText || "").trim()))
+      );
+      await wait(800);
+      const current = getCurrentCategoryText();
+      const matched = current.includes(name) || (name === "其他闲置" && /其他闲置|闲置/.test(current));
+      return { ok: matched, current, reason: matched ? "selected" : "selection-not-applied" };
+    };
+
+    return (async () => {
+      const before = getPublishButton();
+      const appOnlyBefore = hasAppOnlyHint();
+      if (before && !isDisabled(before) && !appOnlyBefore) {
+        return JSON.stringify({
+          changed: false,
+          skipped: true,
+          reason: "publishable-already",
+          publishDisabled: isDisabled(before),
+          appOnly: appOnlyBefore,
+        });
+      }
+      const result = await chooseCategory("其他闲置");
+      const after = getPublishButton();
+      return JSON.stringify({
+        changed: !!result.ok,
+        reason: result.reason,
+        current: result.current || "",
+        publishDisabled: isDisabled(after),
+        appOnly: hasAppOnlyHint()
+      });
+    })();
+  })()' >/dev/null
+  sleep 1
+  PUBLISH_RESULT="$(run_chrome_js '(() => { const publishText = "\u53d1\u5e03"; const btn = Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => visible(el) && (el.innerText||"").trim() === publishText && String(el.className||"").includes("publish-button")) || Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => visible(el) && (el.innerText||"").trim() === publishText); if (!btn) return "NO_BUTTON"; const disabled = btn.getAttribute("aria-disabled") === "true" || !!btn.disabled || /\\bdisabled\\b|\\bloading\\b/.test(String(btn.className||"")); if (disabled) return "BUTTON_DISABLED"; btn.click(); return "CLICKED"; function visible(el){ if(!el) return false; const style = getComputedStyle(el); if(style.display === \"none\" || style.visibility === \"hidden\") return false; const rect = el.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; } })()')"
   echo "PUBLISH_CLICK: $PUBLISH_RESULT"
   sleep 3
 fi

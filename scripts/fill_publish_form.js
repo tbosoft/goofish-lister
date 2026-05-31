@@ -55,6 +55,8 @@ function composeDescription(title, description, includeTitleInDescription) {
   return `${cleanTitle}\n\n${cleanDescription}`;
 }
 
+const WEB_PUBLISH_CATEGORY_FALLBACK = '其他闲置';
+
 (async () => {
   const draftPath = arg('--draft');
   const dryRun = hasFlag('--dry-run');
@@ -363,14 +365,51 @@ function composeDescription(title, description, includeTitleInDescription) {
   async function bodyHasAppOnlyHint() {
     try {
       const t = await page.evaluate(() => document.body?.innerText || '');
-      return /请用\s*APP\s*发布|去\s*APP\s*发布|仅支持\s*APP\s*发布|只支持\s*APP\s*发布/u.test(t);
+      return /请用\s*APP\s*发布|去\s*APP\s*发布|仅支持\s*APP\s*发布|只支持\s*APP\s*发布|网页版暂不支持发布此分类|请使用闲鱼APP扫码继续发布/u.test(t);
     } catch {
       return false;
     }
   }
 
   async function openCategoryPicker() {
+    async function triggerAntSelect(loc) {
+      const el = await pickVisible(loc);
+      if (!el) return false;
+      try {
+        await el.scrollIntoViewIfNeeded().catch(() => {});
+        await el.hover({ timeout: 1000 }).catch(() => {});
+      } catch {
+        // ignore
+      }
+      try {
+        await el.dispatchEvent('mousedown');
+        await el.dispatchEvent('mouseup');
+        await el.dispatchEvent('click');
+      } catch {
+        // ignore
+      }
+      try {
+        await el.click({ timeout: 2000 });
+      } catch {
+        // ignore and keep trying
+      }
+      try {
+        await el.focus().catch(() => {});
+        await page.keyboard.press('ArrowDown').catch(() => {});
+      } catch {
+        // ignore
+      }
+      await page.waitForTimeout(250);
+      return true;
+    }
+
     const opened =
+      (await triggerAntSelect(
+        page.locator('.ant-form-item')
+          .filter({ hasText: /分类|类目/u })
+          .locator('.ant-select-selector, input[role="combobox"], [role="combobox"], .ant-select-selection-search-input, .ant-select')
+          .first()
+      )) ||
       (await clickFirst([
         page.getByRole('button', { name: /分类|类目|属性/u }),
         page.getByText(/分类|类目|属性规格/u).first(),
@@ -393,7 +432,140 @@ function composeDescription(title, description, includeTitleInDescription) {
       page.locator('.ant-drawer')
     );
 
-    return overlay;
+    if (overlay) return overlay;
+
+    const categorySelectOpen = await page
+      .locator('.ant-form-item')
+      .filter({ hasText: /分类|类目/u })
+      .locator('.ant-select-open, .ant-select-focused')
+      .count()
+      .catch(() => 0);
+
+    if (categorySelectOpen > 0) return page.locator('body');
+
+    return null;
+  }
+
+  async function getCurrentCategoryText() {
+    const candidates = [
+      page.locator('.ant-form-item').filter({ hasText: /分类|类目|属性规格/u }).first(),
+      page.locator('[class*="category"]').first(),
+      page.locator('[role="combobox"]').first(),
+    ];
+
+    for (const loc of candidates) {
+      try {
+        if ((await loc.count()) === 0) continue;
+        const text = ((await loc.innerText({ timeout: 1000 }).catch(() => '')) || '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (text) return text;
+      } catch {
+        // try next
+      }
+    }
+    return '';
+  }
+
+  async function selectCategoryByDom(name) {
+    const categoryName = String(name || '').trim();
+    if (!categoryName) return { ok: false, reason: 'empty-category' };
+
+    return await page.evaluate(async ({ categoryName }) => {
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const visible = (el) => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const textOf = (el) => ((el?.innerText || el?.textContent || el?.value || '').replace(/\s+/g, ' ').trim());
+      const clickElement = (el) => {
+        if (!el || !visible(el)) return false;
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const fire = (type) => el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        fire('mousedown');
+        fire('mouseup');
+        el.click();
+        return true;
+      };
+      const openAntSelect = async (trigger) => {
+        if (!trigger || !visible(trigger)) return false;
+        clickElement(trigger);
+        const input =
+          trigger.matches?.('input') ? trigger :
+          trigger.querySelector?.('input[role=combobox], .ant-select-selection-search-input') ||
+          trigger.closest?.('.ant-select')?.querySelector?.('input[role=combobox], .ant-select-selection-search-input');
+        if (input && visible(input)) {
+          try {
+            input.focus();
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true }));
+          } catch {
+            // ignore
+          }
+        }
+        await wait(250);
+        return true;
+      };
+      const categoryFormItem = Array.from(document.querySelectorAll('.categoryList--lqyn7MJb .ant-form-item, .ant-form-item'))
+        .find((el) => /分类/.test(textOf(el)));
+      const trigger =
+        categoryFormItem?.querySelector('.ant-select-selector, [role=combobox], .ant-select') ||
+        Array.from(document.querySelectorAll('.ant-select-selector, [role=combobox], .ant-select'))
+          .find((el) => visible(el) && /分类|类目|属性规格/.test(textOf(el.closest('.ant-form-item') || el)));
+      if (!(await openAntSelect(trigger))) return { ok: false, reason: 'trigger-not-found' };
+      await wait(800);
+
+      const dropdown = Array.from(document.querySelectorAll('.ant-select-dropdown'))
+        .find((el) => visible(el)) || document;
+      const holder =
+        dropdown.querySelector('.rc-virtual-list-holder') ||
+        dropdown.querySelector('.rc-virtual-list');
+      const findOption = () => {
+        const exactRe = new RegExp(`^\\s*${categoryName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
+        const candidates = Array.from(dropdown.querySelectorAll('.ant-select-item-option,[role=option],.ant-select-item-option-content'));
+        return candidates.filter((el) => visible(el)).find((el) => {
+            const title = (el.getAttribute('title') || '').trim();
+            const text = textOf(el);
+            return exactRe.test(title) || exactRe.test(text) || title.includes(categoryName) || text.includes(categoryName);
+          });
+      };
+
+      let option = findOption();
+      if (!option && holder) {
+        const maxScrollTop = Math.max(0, holder.scrollHeight - holder.clientHeight);
+        let attempts = 0;
+        let lastScrollTop = -1;
+        while (!option && attempts < 40) {
+          const ratio = attempts / 39;
+          holder.scrollTop = Math.round(maxScrollTop * ratio);
+          holder.dispatchEvent(new Event('scroll', { bubbles: true }));
+          await wait(150);
+          option = findOption();
+          if (option) break;
+          if (holder.scrollTop === lastScrollTop && holder.scrollTop >= maxScrollTop) break;
+          lastScrollTop = holder.scrollTop;
+          attempts += 1;
+        }
+      }
+      if (!clickElement(option)) return { ok: false, reason: 'option-not-found' };
+
+      await wait(300);
+      const confirm = Array.from(document.querySelectorAll('button,[role=button],div,span')).find((el) => {
+        return visible(el) && /确定|完成|确认/.test(textOf(el));
+      });
+      clickElement(confirm);
+      await wait(800);
+
+      const current = Array.from(document.querySelectorAll('.ant-form-item,[class*=category],[role=combobox]'))
+        .filter(visible)
+        .map((el) => textOf(el))
+        .find((text) => text && /分类|类目|属性规格|闲置/.test(text)) || '';
+      const matched = current.includes(categoryName) || (categoryName === '其他闲置' && /其他闲置|闲置/.test(current));
+      return { ok: matched, reason: matched ? 'selected' : 'selection-not-applied', current };
+    }, { categoryName });
   }
 
   async function selectCategoryInPicker(name) {
@@ -402,35 +574,35 @@ function composeDescription(title, description, includeTitleInDescription) {
 
     const overlay = await openCategoryPicker();
     const root = overlay || page;
-
-    // Try to use the picker search box if present.
-    const searchInput = await pickVisible(
-      root.getByPlaceholder(/搜索|输入/u),
-      root.getByLabel(/搜索/u),
-      root.locator('input[type="search"]')
-    );
-    if (searchInput) {
-      try {
-        await searchInput.click({ timeout: 2000 });
-        await searchInput.fill(categoryName);
-        await page.waitForTimeout(600);
-      } catch {
-        // ignore
-      }
-    }
-
+    const exactRe = new RegExp(`^\\s*${escapeRegExp(categoryName)}\\s*$`);
     const partial = categoryName.length > 4 ? categoryName.slice(0, 4) : categoryName;
-    const re = new RegExp(escapeRegExp(partial));
+    const partialRe = new RegExp(escapeRegExp(partial));
 
-    const picked = await clickFirst([
-      root.getByRole('option', { name: re }),
-      root.locator('.ant-cascader-menu-item').filter({ hasText: re }).first(),
-      root.locator('.ant-select-item-option').filter({ hasText: re }).first(),
-      root.locator('.ant-select-item-option-content').filter({ hasText: re }).first(),
-      root.getByText(re).first(),
-    ]);
+    const exactCandidates = [
+      root.getByRole('option', { name: exactRe }),
+      root.locator('.ant-cascader-menu-item').filter({ hasText: exactRe }).first(),
+      root.locator('.ant-select-item-option').filter({ hasText: exactRe }).first(),
+      root.locator('.ant-select-item-option-content').filter({ hasText: exactRe }).first(),
+      root.getByText(exactRe).first(),
+      root.locator(`.ant-select-item-option[title="${categoryName}"]`).first(),
+    ];
+    const fuzzyCandidates = [
+      root.getByRole('option', { name: partialRe }),
+      root.locator('.ant-cascader-menu-item').filter({ hasText: partialRe }).first(),
+      root.locator('.ant-select-item-option').filter({ hasText: partialRe }).first(),
+      root.locator('.ant-select-item-option-content').filter({ hasText: partialRe }).first(),
+      root.getByText(partialRe).first(),
+    ];
 
-    if (!picked) return false;
+    const picked = (await clickFirst(exactCandidates)) || (await clickFirst(fuzzyCandidates));
+
+    if (!picked) {
+      const domResult = await selectCategoryByDom(categoryName);
+      if (!domResult?.ok) {
+        return false;
+      }
+      return true;
+    }
 
     // Some pickers require explicit confirmation.
     await clickFirst([
@@ -439,32 +611,58 @@ function composeDescription(title, description, includeTitleInDescription) {
     ]);
 
     await page.waitForTimeout(800);
+    const currentText = await getCurrentCategoryText();
+    const matched =
+      currentText.includes(categoryName) ||
+      currentText.includes(partial) ||
+      (categoryName === WEB_PUBLISH_CATEGORY_FALLBACK && /其他闲置|闲置/.test(currentText));
+
+    if (!matched) {
+      await page.keyboard.press('Escape').catch(() => {});
+      const domResult = await selectCategoryByDom(categoryName);
+      if (!domResult?.ok) {
+        return false;
+      }
+      return true;
+    }
+
     return true;
   }
 
-  async function ensurePublishableCategory() {
+  async function ensurePublishableCategory(options = {}) {
+    const { forceFallback = false, reason = '' } = options;
     const btn = await getPublishButton();
     if (!btn) return;
 
     const disabledBefore = await isButtonDisabled(btn);
-    if (!disabledBefore) return;
+    const appOnlyBefore = await bodyHasAppOnlyHint();
+    if (!disabledBefore && !appOnlyBefore && !forceFallback) return;
 
     // Give upload/async validation a chance first.
     await page.waitForTimeout(1500);
 
     const disabledAgain = await isButtonDisabled(btn);
-    if (!disabledAgain) return;
-
     const appOnly = await bodyHasAppOnlyHint();
-    if (!appOnly) return;
+    if (!disabledAgain && !appOnly && !forceFallback) return;
 
-    console.log('检测到“请用APP发布”，尝试自动切换到可网页发布的类目...');
+    if (appOnly) {
+      console.log('检测到“请用APP发布”，尝试自动切换到可网页发布的类目...');
+    } else {
+      console.log(`发布按钮仍不可用，尝试切换到兜底类目${reason ? `（${reason}）` : ''}...`);
+    }
 
     const candidates = [];
+    // "其他闲置" is the broad fallback category that remains publishable for generic second-hand items.
+    candidates.push(WEB_PUBLISH_CATEGORY_FALLBACK);
     // Prefer a known web-friendly fallback first.
     candidates.push('笔记资料');
     // Then try draft category if it differs and is not the common blocked one.
-    if (draftCategory && draftCategory !== '电子资料' && draftCategory !== '笔记资料') {
+    if (
+      draftCategory &&
+      draftCategory !== '电子资料' &&
+      draftCategory !== '笔记资料' &&
+      draftCategory !== WEB_PUBLISH_CATEGORY_FALLBACK
+    ) {
       candidates.push(draftCategory);
     }
     // Additional fallbacks.
@@ -860,13 +1058,26 @@ function composeDescription(title, description, includeTitleInDescription) {
       const publishBtn = await getPublishButton();
       if (publishBtn) {
         // 检查按钮是否被禁用
-        const isDisabled = await isButtonDisabled(publishBtn);
+        let isDisabled = await isButtonDisabled(publishBtn);
+        let finalAppOnly = await bodyHasAppOnlyHint();
         if (isDisabled) {
           console.log('发布按钮当前不可用，可能仍在校验/上传处理中...');
           await page.waitForTimeout(3000);
+          isDisabled = await isButtonDisabled(publishBtn);
+          finalAppOnly = await bodyHasAppOnlyHint();
         }
 
-        await publishBtn.click({ timeout: 10000 });
+        if (isDisabled || finalAppOnly) {
+          await ensurePublishableCategory({ forceFallback: true, reason: '发布前最终检查' });
+          await page.waitForTimeout(1000);
+        }
+
+        const finalPublishBtn = (await getPublishButton()) || publishBtn;
+        if (await isButtonDisabled(finalPublishBtn)) {
+          console.log('WARN: 切换兜底类目后发布按钮仍不可用，跳过自动点击发布。');
+          return;
+        }
+        await finalPublishBtn.click({ timeout: 10000 });
         console.log('已成功点击发布按钮！');
         await page.waitForTimeout(3000); // 等待发布成功或跳转
       } else {
