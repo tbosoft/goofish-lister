@@ -59,6 +59,7 @@ ASSETS_FILE="$WORK_DIR/listing-assets.json"
 DRAFT_LOG="$WORK_DIR/draft.log"
 FILL_JS="$WORK_DIR/fill_publish.js"
 UPLOAD_JS="$WORK_DIR/upload_image.js"
+PUBLISH_JS="$WORK_DIR/click_publish.js"
 
 osascript -e 'tell application "Google Chrome" to activate'
 osascript -e "tell application \"Google Chrome\" to set URL of active tab of front window to \"$URL\""
@@ -885,7 +886,129 @@ else
     })();
   })()' >/dev/null
   sleep 1
-  PUBLISH_RESULT="$(run_chrome_js '(() => { const publishText = "\u53d1\u5e03"; const btn = Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => visible(el) && (el.innerText||"").trim() === publishText && String(el.className||"").includes("publish-button")) || Array.from(document.querySelectorAll("button,[role=button],div,span")).find(el => visible(el) && (el.innerText||"").trim() === publishText); if (!btn) return "NO_BUTTON"; const disabled = btn.getAttribute("aria-disabled") === "true" || !!btn.disabled || /\\bdisabled\\b|\\bloading\\b/.test(String(btn.className||"")); if (disabled) return "BUTTON_DISABLED"; btn.click(); return "CLICKED"; function visible(el){ if(!el) return false; const style = getComputedStyle(el); if(style.display === \"none\" || style.visibility === \"hidden\") return false; const rect = el.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; } })()')"
+  node -e '
+const fs = require("fs");
+const [outFile] = process.argv.slice(1);
+const js = `(() => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const textOf = (el) => ((el?.innerText || el?.textContent || el?.value || "").replace(/\\s+/g, " ").trim());
+  const isDisabled = (el) => {
+    if (!el) return true;
+    let node = el;
+    for (let i = 0; i < 5 && node; i++, node = node.parentElement) {
+      if (node.disabled || node.getAttribute?.("aria-disabled") === "true") return true;
+      if (/\\bdisabled\\b|\\bloading\\b/.test(String(node.className || ""))) return true;
+    }
+    return false;
+  };
+  const clickableAncestor = (el) => {
+    let node = el;
+    for (let i = 0; i < 7 && node; i++, node = node.parentElement) {
+      if (node.matches?.("button,[role=button],a,[class*=publish-button],[class*=PublishButton]")) return node;
+    }
+    return el;
+  };
+  const scorePublishNode = (el, idx) => {
+    const text = textOf(el);
+    const cls = String(el.className || "");
+    let score = 0;
+    if (text === "\\u53d1\\u5e03") score += 200;
+    if (/^\\s*\\u53d1\\u5e03\\s*$/.test(text)) score += 160;
+    if (/publish-button|PublishButton/.test(cls)) score += 180;
+    if (el.matches?.("button")) score += 80;
+    if (el.matches?.("[role=button]")) score += 50;
+    if (/\\u53d1\\u5e03/.test(text)) score += 40;
+    if (/\\u53d1\\u5e03\\u5931\\u8d25|\\u53d1\\u5e03\\u6210\\u529f|\\u53d1\\u5e03\\u9875/.test(text)) score -= 150;
+    if (isDisabled(el)) score -= 500;
+    score -= idx * 0.01;
+    return score;
+  };
+  const findPublishButton = () => {
+    const nodes = Array.from(document.querySelectorAll(
+      "button[class*=publish-button], [role=button][class*=publish-button], [class*=publish-button], button, [role=button], div, span"
+    ))
+      .filter(visible)
+      .filter((el) => /\\u53d1\\u5e03/.test(textOf(el)) || /publish-button|PublishButton/.test(String(el.className || "")))
+      .map(clickableAncestor)
+      .filter(visible);
+    const uniq = [];
+    const seen = new Set();
+    for (const el of nodes) {
+      if (seen.has(el)) continue;
+      seen.add(el);
+      uniq.push(el);
+    }
+    return uniq
+      .map((el, idx) => ({ el, score: scorePublishNode(el, idx) }))
+      .sort((a, b) => b.score - a.score)[0]?.el || null;
+  };
+  const fireClick = (el) => {
+    el.scrollIntoView?.({ block: "center", inline: "center" });
+    el.focus?.();
+    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+    }
+    el.click?.();
+  };
+  const findConfirmButton = () => {
+    const modalRoots = Array.from(document.querySelectorAll(
+      ".ant-modal, .ant-modal-root, [role=dialog], [class*=modal], [class*=Modal]"
+    )).filter(visible);
+    const roots = modalRoots.length ? modalRoots : [document];
+    const exact = /^\\s*(\\u786e\\u8ba4|\\u786e\\u5b9a|\\u53d1\\u5e03|\\u7acb\\u5373\\u53d1\\u5e03|\\u786e\\u8ba4\\u53d1\\u5e03)\\s*$/;
+    for (const root of roots) {
+      const btn = Array.from(root.querySelectorAll("button,[role=button],div,span"))
+        .filter(visible)
+        .map(clickableAncestor)
+        .filter(visible)
+        .find((el) => exact.test(textOf(el)) && !isDisabled(el));
+      if (btn) return btn;
+    }
+    return null;
+  };
+  return (async () => {
+    const startUrl = location.href;
+    let btn = null;
+    for (let i = 0; i < 24; i++) {
+      btn = findPublishButton();
+      if (btn && !isDisabled(btn)) break;
+      await wait(500);
+    }
+    if (!btn) return JSON.stringify({ ok: false, result: "NO_BUTTON" });
+    const disabled = isDisabled(btn);
+    const info = {
+      tag: btn.tagName,
+      className: String(btn.className || ""),
+      text: textOf(btn).slice(0, 80),
+      disabled,
+    };
+    if (disabled) return JSON.stringify({ ok: false, result: "BUTTON_DISABLED", ...info });
+    fireClick(btn);
+    await wait(1200);
+    const confirmBtn = findConfirmButton();
+    let confirmClicked = false;
+    if (confirmBtn && confirmBtn !== btn) {
+      fireClick(confirmBtn);
+      confirmClicked = true;
+      await wait(1200);
+    }
+    return JSON.stringify({ ok: true, result: "CLICKED", confirmClicked, startUrl, endUrl: location.href, ...info });
+  })();
+})()`;
+fs.writeFileSync(outFile, js);
+' "$PUBLISH_JS"
+  PUBLISH_RESULT="$(osascript \
+    -e "set jsCode to read POSIX file \"$(pwd)/$PUBLISH_JS\"" \
+    -e 'using terms from application "Google Chrome"' \
+    -e 'tell application "Google Chrome" to tell active tab of front window to execute javascript jsCode' \
+    -e 'end using terms from')"
   echo "PUBLISH_CLICK: $PUBLISH_RESULT"
   sleep 3
 fi
