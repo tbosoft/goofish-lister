@@ -2,8 +2,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const LEGACY_PROFILE_DIR = path.join(os.homedir(), '.openclaw', 'goofish-profile');
-const PROFILE_ROOT_DIR = path.join(os.homedir(), '.openclaw', 'goofish-profiles');
+const LEGACY_PROFILE_DIR = path.join(os.homedir(), '.goofish', 'profiles', 'default');
+const PROFILE_ROOT_DIR = path.join(os.homedir(), '.goofish', 'profiles');
 
 function normalizeGoofishAccountName(accountName) {
   const raw = String(accountName || process.env.GOOFISH_ACCOUNT || 'default').trim();

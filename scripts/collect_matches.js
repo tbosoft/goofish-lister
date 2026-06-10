@@ -10,7 +10,7 @@
  *  4) Stop once we have target matches
  *
  * Usage:
- *   GOOFISH_USER_DATA_DIR=~/.openclaw/goofish-profile \
+ *   GOOFISH_USER_DATA_DIR=~/.goofish/profiles/default \
  *     node scripts/collect_matches.js --in outputs/candidates-xxx.json --target 30 --minPrice 10 --minRatio 0.05
  */
 
@@ -60,7 +60,7 @@ function parseMetricsFromText(txt) {
   const raw = JSON.parse(await fs.readFile(inPath, 'utf8'));
   const candidates = raw.items || [];
 
-  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.openclaw', 'goofish-profile');
+  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.goofish', 'profiles', 'default');
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
     channel: 'chrome',

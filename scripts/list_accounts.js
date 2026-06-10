@@ -5,8 +5,8 @@ const os = require('os');
 const path = require('path');
 const { hasCachedLoginProfile } = require('./lib/goofish_login');
 
-const legacyDir = path.join(os.homedir(), '.openclaw', 'goofish-profile');
-const profilesRoot = path.join(os.homedir(), '.openclaw', 'goofish-profiles');
+const legacyDir = path.join(os.homedir(), '.goofish', 'profiles', 'default');
+const profilesRoot = path.join(os.homedir(), '.goofish', 'profiles');
 
 function listAccounts() {
   const accounts = [];

@@ -42,7 +42,7 @@ async function main() {
 
   const itemUrl = args.url || args._[0];
   const outDir = args.out || 'outputs/downloaded-images';
-  const userDataDir = args.profile || process.env.GOOFISH_USER_DATA_DIR || path.join(process.env.HOME || '', '.openclaw/goofish-profile');
+  const userDataDir = args.profile || process.env.GOOFISH_USER_DATA_DIR || path.join(process.env.HOME || '', '.goofish/profiles/default');
 
   must(itemUrl && /^https:\/\/(www\.)?goofish\.com\//.test(itemUrl), 'Provide a goofish item URL via --url or as the first argument.');
 

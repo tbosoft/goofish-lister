@@ -7,7 +7,7 @@
  * Output: outputs/enriched-*.json
  *
  * Usage:
- *   GOOFISH_USER_DATA_DIR=~/.openclaw/goofish-profile node scripts/enrich_metrics.js --in outputs/candidates-xxx.json --max 20
+ *   GOOFISH_USER_DATA_DIR=~/.goofish/profiles/default node scripts/enrich_metrics.js --in outputs/candidates-xxx.json --max 20
  */
 
 const fs = require('fs/promises');
@@ -42,7 +42,7 @@ function parseFirstIntNear(lines, re) {
   const raw = JSON.parse(await fs.readFile(inPath, 'utf8'));
   const items = (raw.items || []).slice(0, max);
 
-  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.openclaw', 'goofish-profile');
+  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.goofish', 'profiles', 'default');
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
     channel: 'chrome',

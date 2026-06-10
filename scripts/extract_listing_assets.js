@@ -6,7 +6,7 @@
  * - Must pass --i-own-rights AND --rights-file <path> (file must exist)
  *
  * Usage:
- *   GOOFISH_USER_DATA_DIR=~/.openclaw/goofish-profile \
+ *   GOOFISH_USER_DATA_DIR=~/.goofish/profiles/default \
  *   node skills/goofish-lister/scripts/extract_listing_assets.js \
  *     --url "https://www.goofish.com/item?id=..." \
  *     --i-own-rights --rights-file skills/goofish-lister/references/rights.md
@@ -181,7 +181,7 @@ function truncateText(s, maxLen) {
     await fs.mkdir(processedDir, { recursive: true });
   }
 
-  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.openclaw', 'goofish-profile');
+  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.goofish', 'profiles', 'default');
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
     channel: 'chrome',

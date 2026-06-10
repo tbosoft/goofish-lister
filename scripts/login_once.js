@@ -4,7 +4,7 @@
  * Launches a *persistent* (headed) Chrome/Chromium profile so you can login.
  *
  * Usage:
- *   GOOFISH_USER_DATA_DIR=~/.openclaw/goofish-profile node scripts/login_once.js
+ *   GOOFISH_USER_DATA_DIR=~/.goofish/profiles/default node scripts/login_once.js
  */
 
 const fs = require('fs/promises');

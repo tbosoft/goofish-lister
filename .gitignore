@@ -3,6 +3,6 @@ outputs/
 .DS_Store
 *.log
 .gemini/
-.openclaw/
+.goofish/
 # 如果有敏感配置文件夹也可以排除
 # config/local_settings.json
