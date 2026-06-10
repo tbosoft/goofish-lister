@@ -304,7 +304,10 @@ function listImagePaths(images) {
     coreLines = takeCoreSectionLines(bodySeed, raw.title || '');
   }
 
-  const description = buildStructuredDescription(coreLines);
+  const preserveDescriptionFormat = Boolean(raw?.meta?.inputs?.preserveDescriptionFormat);
+  const description = preserveDescriptionFormat && descSeed
+    ? sanitizeGoofishText(descSeed, { stripBracketTokens: true })
+    : buildStructuredDescription(coreLines);
 
   // Images selection:
   // - Prefer per-image processedPath/localPath so we preserve original listing order

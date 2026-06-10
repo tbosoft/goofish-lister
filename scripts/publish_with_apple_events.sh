@@ -54,6 +54,7 @@ DESCRIPTION_FILE="$WORK_DIR/description.txt"
 IMAGES_FILE="$WORK_DIR/images.txt"
 IMAGE_URL_LIST_FILE="$WORK_DIR/image-urls.txt"
 IMAGE_PATH_LIST_FILE="$WORK_DIR/image-paths.txt"
+PROCESSED_IMAGE_PATH_LIST_FILE="$WORK_DIR/image-paths-processed.txt"
 ASSETS_FILE="$WORK_DIR/listing-assets.json"
 DRAFT_LOG="$WORK_DIR/draft.log"
 FILL_JS="$WORK_DIR/fill_publish.js"
@@ -105,7 +106,10 @@ write_chrome_text_utf8 'document.body.innerText' "$BODY_FILE"
 write_chrome_text_utf8 '(() => {
   function cleanText(txt) {
     return String(txt || "")
-      .replace(/\s+\n/g, "\n")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[^\S\n]{2,}/g, " ").trim())
+      .join("\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
   }
@@ -313,12 +317,61 @@ while IFS= read -r IMAGE_URL || [[ -n "$IMAGE_URL" ]]; do
 done < "$IMAGE_URL_LIST_FILE"
 printf '%s\n' "${IMAGE_PATHS[@]}" > "$IMAGE_PATH_LIST_FILE"
 
+node -e '
+const fs = require("fs/promises");
+const path = require("path");
+const sharp = require("sharp");
+const { cropWhitespaceAndAddBorder } = require("./scripts/lib/image_processing");
+
+(async () => {
+  const [imageListFile, urlListFile, processedListFile, processedDir] = process.argv.slice(1);
+  const imagePaths = (await fs.readFile(imageListFile, "utf8"))
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const urls = (await fs.readFile(urlListFile, "utf8"))
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  await fs.mkdir(processedDir, { recursive: true });
+  const outPaths = [];
+  for (let i = 0; i < imagePaths.length; i++) {
+    const imagePath = imagePaths[i];
+    const outPath = path.join(processedDir, `image-${i}.jpg`);
+    try {
+      const buf = await fs.readFile(imagePath);
+      const img = sharp(buf, { failOn: "none" });
+      await img.metadata();
+      const { jpgBuf } = await cropWhitespaceAndAddBorder(buf, {
+        border: 40,
+        jpgQuality: 92,
+        seed: `${urls[i] || imagePath}:image-${i}`,
+      });
+      await fs.writeFile(outPath, jpgBuf);
+      outPaths.push(outPath);
+    } catch (e) {
+      console.error(`WARN: failed to process image ${imagePath}: ${String(e?.message || e)}`);
+      outPaths.push(imagePath);
+    }
+  }
+  await fs.writeFile(processedListFile, outPaths.join("\n"));
+})();
+' "$IMAGE_PATH_LIST_FILE" "$IMAGE_URL_LIST_FILE" "$PROCESSED_IMAGE_PATH_LIST_FILE" "$WORK_DIR/processed-images"
+
+IMAGE_PATH_LIST_FILE="$PROCESSED_IMAGE_PATH_LIST_FILE"
+IMAGE_PATHS=()
+while IFS= read -r IMAGE_PATH || [[ -n "$IMAGE_PATH" ]]; do
+  [[ -z "$IMAGE_PATH" ]] && continue
+  IMAGE_PATHS+=("$IMAGE_PATH")
+done < "$IMAGE_PATH_LIST_FILE"
+
 TITLE="$(cat "$TITLE_FILE")"
 FINAL_URL="$(cat "$URL_FILE")"
 
 node -e '
 const fs = require("fs");
-const [assetsFile, titleFile, urlFile, bodyFile, descFile, imageListFile] = process.argv.slice(1);
+const [assetsFile, titleFile, urlFile, bodyFile, descFile, imageListFile, imageUrlListFile] = process.argv.slice(1);
 const title = fs.readFileSync(titleFile, "utf8").trim();
 const url = fs.readFileSync(urlFile, "utf8").trim();
 const bodyText = fs.readFileSync(bodyFile, "utf8").trim();
@@ -326,9 +379,12 @@ const descText = fs.existsSync(descFile) ? fs.readFileSync(descFile, "utf8").tri
 const imagePaths = fs.existsSync(imageListFile)
   ? fs.readFileSync(imageListFile, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
   : [];
+const imageUrls = fs.existsSync(imageUrlListFile)
+  ? fs.readFileSync(imageUrlListFile, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
+  : [];
 const images = imagePaths.map((imagePath, order) => ({
   order,
-  url: null,
+  url: imageUrls[order] || null,
   alt: null,
   source: "chrome-apple-events",
   width: null,
@@ -353,8 +409,17 @@ function cleanLines(text) {
   return String(text || "")
     .replace(/\r\n?/g, "\n")
     .split("\n")
-    .map((line) => line.trim())
+    .map((line) => line.replace(/[^\S\n]{2,}/g, " ").trim())
     .filter(Boolean);
+}
+function normalizeTextPreservingParagraphs(text) {
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[^\S\n]{2,}/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 function cleanTitle(t) {
   return String(t || "").replace(/[_\-\s]*闲鱼\s*$/u, "").trim();
@@ -445,7 +510,7 @@ function takeCoreSectionLines(body, listingTitle) {
   return core;
 }
 const descLines = takeCoreSectionLines(descText || lines.slice(start, end).join("\n"), title);
-const description = descLines.join("\n");
+const description = normalizeTextPreservingParagraphs(descText || descLines.join("\n"));
 const out = {
   url,
   fetchedAt: new Date().toISOString(),
@@ -459,12 +524,12 @@ const out = {
     tool: "goofish-lister",
     script: "scripts/publish_with_apple_events.sh",
     generatedAt: new Date().toISOString(),
-    inputs: { browser: "chrome-apple-events" },
+    inputs: { browser: "chrome-apple-events", preserveDescriptionFormat: true },
     counts: { images: images.length }
   }
 };
 fs.writeFileSync(assetsFile, JSON.stringify(out, null, 2));
-' "$ASSETS_FILE" "$TITLE_FILE" "$URL_FILE" "$BODY_FILE" "$DESCRIPTION_FILE" "$IMAGE_PATH_LIST_FILE"
+' "$ASSETS_FILE" "$TITLE_FILE" "$URL_FILE" "$BODY_FILE" "$DESCRIPTION_FILE" "$IMAGE_PATH_LIST_FILE" "$IMAGE_URL_LIST_FILE"
 
 node scripts/generate_draft.js \
   --in "$ASSETS_FILE" \
@@ -538,13 +603,13 @@ const js = `(() => {
   function setEditable(el, text) {
     el.focus();
     try {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      document.execCommand("delete", false);
-      document.execCommand("insertText", false, String(text));
+      const value = String(text);
+      el.innerHTML = "";
+      const lines = value.replace(/\\r\\n?/g, "\\n").split("\\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) el.appendChild(document.createElement("br"));
+        el.appendChild(document.createTextNode(lines[i] || ""));
+      }
     } catch {
       el.innerText = String(text);
     }
@@ -623,11 +688,21 @@ fs.writeFileSync(outFile, js);
 if [[ ${#IMAGE_PATHS[@]} -gt 0 ]]; then
   node -e '
 const fs = require("fs");
+const path = require("path");
 const [imageListFile, outFile] = process.argv.slice(1);
 const imagePaths = fs.readFileSync(imageListFile, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+function mimeFor(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".png") return "image/png";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".gif") return "image/gif";
+  return "application/octet-stream";
+}
 const payloads = imagePaths.map((imagePath) => ({
   b64: fs.readFileSync(imagePath, "base64"),
-  name: require("path").basename(imagePath)
+  name: path.basename(imagePath),
+  type: mimeFor(imagePath)
 }));
 const js = `(() => {
   const payloads = ${JSON.stringify(payloads)};
@@ -639,7 +714,7 @@ const js = `(() => {
     const bin = atob(payload.b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    dt.items.add(new File([bytes], payload.name, { type: "image/webp" }));
+    dt.items.add(new File([bytes], payload.name, { type: payload.type }));
   }
   input.files = dt.files;
   input.dispatchEvent(new Event("input", { bubbles: true }));
