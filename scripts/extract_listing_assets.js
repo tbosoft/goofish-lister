@@ -19,6 +19,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const sharp = require('sharp');
 const { chromium } = require('playwright');
 const { buildMeta } = require('./lib/output_meta');
@@ -190,8 +191,14 @@ function truncateText(s, maxLen) {
   });
 
   const page = ctx.pages()[0] || (await ctx.newPage());
-  // Goofish requires network idle or specific selector loading to properly fetch dynamic details
-  await page.goto(resolvedUrl, { waitUntil: 'networkidle', timeout: 60000 });
+  // Goofish detail pages can keep long-polling/analytics requests open, so
+  // requiring networkidle here can prevent extraction from ever reaching the DOM.
+  await page.goto(resolvedUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 10000 });
+  } catch {
+    console.log('WARN: Page did not reach networkidle; proceeding after DOM content loaded.');
+  }
 
   // If the URL was a short link that required JS redirect, wait for it to land on goofish.com.
   if (resolvedUrl !== url || !page.url().includes('goofish.com')) {
