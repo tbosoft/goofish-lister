@@ -67,7 +67,8 @@ const WEB_PUBLISH_CATEGORY_FALLBACK = '其他闲置';
   const holdMinutes = parseFloat(arg('--hold-minutes', '30'));
   const noPublish = hasFlag('--no-publish');
   const forceCategory = hasFlag('--force-category');
-  const account = normalizeGoofishAccountName(arg('--account'));
+  const accountArg = arg('--account');
+  const account = normalizeGoofishAccountName(accountArg);
 
   if (!draftPath) {
     console.error('Missing --draft <draft.json>');
@@ -124,7 +125,7 @@ const WEB_PUBLISH_CATEGORY_FALLBACK = '其他闲置';
     process.exit(0);
   }
 
-  const userDataDir = getGoofishUserDataDir(account);
+  const userDataDir = getGoofishUserDataDir(accountArg);
   if (!hasCachedLoginProfile(userDataDir)) {
     console.error(getLoginRequiredMessage(userDataDir, account));
     process.exit(2);

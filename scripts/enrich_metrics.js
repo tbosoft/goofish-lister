@@ -12,9 +12,9 @@
 
 const fs = require('fs/promises');
 const path = require('path');
-const os = require('os');
 const { chromium } = require('playwright');
 const { buildMeta } = require('./lib/output_meta');
+const { getGoofishUserDataDir } = require('./lib/goofish_login');
 
 function arg(name, def = null) {
   const idx = process.argv.indexOf(name);
@@ -42,7 +42,7 @@ function parseFirstIntNear(lines, re) {
   const raw = JSON.parse(await fs.readFile(inPath, 'utf8'));
   const items = (raw.items || []).slice(0, max);
 
-  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.goofish', 'profiles', 'default');
+  const userDataDir = getGoofishUserDataDir();
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
     channel: 'chrome',

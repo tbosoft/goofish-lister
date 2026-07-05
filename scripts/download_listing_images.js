@@ -9,6 +9,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { chromium } from 'playwright';
+import goofishLogin from './lib/goofish_login.js';
+
+const { getGoofishUserDataDir } = goofishLogin;
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -42,7 +45,7 @@ async function main() {
 
   const itemUrl = args.url || args._[0];
   const outDir = args.out || 'outputs/downloaded-images';
-  const userDataDir = args.profile || process.env.GOOFISH_USER_DATA_DIR || path.join(process.env.HOME || '', '.goofish/profiles/default');
+  const userDataDir = args.profile || getGoofishUserDataDir();
 
   must(itemUrl && /^https:\/\/(www\.)?goofish\.com\//.test(itemUrl), 'Provide a goofish item URL via --url or as the first argument.');
 

@@ -23,8 +23,9 @@ function arg(name, def = null) {
 }
 
 (async () => {
-  const account = normalizeGoofishAccountName(arg('--account'));
-  const userDataDir = getGoofishUserDataDir(account);
+  const accountArg = arg('--account');
+  const account = normalizeGoofishAccountName(accountArg);
+  const userDataDir = getGoofishUserDataDir(accountArg);
   await fs.mkdir(userDataDir, { recursive: true });
 
   const context = await chromium.launchPersistentContext(userDataDir, {

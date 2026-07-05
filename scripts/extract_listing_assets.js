@@ -18,12 +18,12 @@
 
 const fs = require('fs/promises');
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
 const sharp = require('sharp');
 const { chromium } = require('playwright');
 const { buildMeta } = require('./lib/output_meta');
 const { cropWhitespaceAndAddBorder } = require('./lib/image_processing');
+const { getGoofishUserDataDir } = require('./lib/goofish_login');
 
 function arg(name, def = null) {
   const idx = process.argv.indexOf(name);
@@ -182,7 +182,7 @@ function truncateText(s, maxLen) {
     await fs.mkdir(processedDir, { recursive: true });
   }
 
-  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.goofish', 'profiles', 'default');
+  const userDataDir = getGoofishUserDataDir();
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
     channel: 'chrome',

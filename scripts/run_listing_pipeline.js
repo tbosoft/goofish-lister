@@ -55,11 +55,11 @@ function resolveUrl() {
   return firstPositionalArg();
 }
 
-function createChildEnv(account) {
+function createChildEnv(account, userDataDir) {
   return {
     ...process.env,
     GOOFISH_ACCOUNT: account,
-    GOOFISH_USER_DATA_DIR: getGoofishUserDataDir(account),
+    GOOFISH_USER_DATA_DIR: userDataDir,
   };
 }
 
@@ -106,9 +106,10 @@ function runNodeScript(scriptName, args, env) {
 
 (async () => {
   const url = resolveUrl();
-  const account = normalizeGoofishAccountName(arg('--account'));
-  const userDataDir = getGoofishUserDataDir(account);
-  const childEnv = createChildEnv(account);
+  const accountArg = arg('--account');
+  const account = normalizeGoofishAccountName(accountArg);
+  const userDataDir = getGoofishUserDataDir(accountArg);
+  const childEnv = createChildEnv(account, userDataDir);
   if (!looksLikeUrl(url)) {
     console.error('Missing supported Goofish URL. Pass one 闲鱼商品链接或短链 as the first argument or via --url.');
     process.exit(2);

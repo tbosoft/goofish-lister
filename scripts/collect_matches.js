@@ -16,8 +16,8 @@
 
 const fs = require('fs/promises');
 const path = require('path');
-const os = require('os');
 const { chromium } = require('playwright');
+const { getGoofishUserDataDir } = require('./lib/goofish_login');
 
 function arg(name, def = null) {
   const idx = process.argv.indexOf(name);
@@ -60,7 +60,7 @@ function parseMetricsFromText(txt) {
   const raw = JSON.parse(await fs.readFile(inPath, 'utf8'));
   const candidates = raw.items || [];
 
-  const userDataDir = process.env.GOOFISH_USER_DATA_DIR || path.join(os.homedir(), '.goofish', 'profiles', 'default');
+  const userDataDir = getGoofishUserDataDir();
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
     channel: 'chrome',

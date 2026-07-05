@@ -86,6 +86,7 @@ skill 应该先返回账号列表，而不是直接进入发布流程。
 - `npm run login` 会打开一个真实浏览器窗口，需要你手动完成闲鱼登录。
 - 每个 `--account` 都会使用独立的本地 profile 目录，互不影响。
 - 不传 `--account` 时默认使用 `default`；如果本机已有旧版单账号目录，会继续复用旧目录保证兼容。
+- 如果设置了 `GOOFISH_USER_DATA_DIR`，只在没有显式指定 `--account` / `GOOFISH_ACCOUNT` 时作为兼容路径使用；指定账号时会强制使用 `~/.goofish/profiles/<账号名>`。
 - 登录完成后关闭浏览器，后续发布流程会复用对应账号的本地缓存登录态。
 - 如果还没有这份缓存，先对目标账号执行登录，再执行 `npm run publish:url -- --account <账号名> "<闲鱼链接>"`。
 - 复用已打开浏览器模式不依赖 Playwright profile 登录缓存，而是通过 Chrome Apple Events 操作当前 Chrome；需要已登录闲鱼，并允许 Apple 事件中的 JavaScript。

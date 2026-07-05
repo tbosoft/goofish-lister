@@ -11,8 +11,12 @@ function normalizeGoofishAccountName(accountName) {
   return raw.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'default';
 }
 
+function hasExplicitGoofishAccount(accountName) {
+  return Boolean(String(accountName || '').trim() || String(process.env.GOOFISH_ACCOUNT || '').trim());
+}
+
 function getGoofishUserDataDir(accountName) {
-  if (process.env.GOOFISH_USER_DATA_DIR) {
+  if (process.env.GOOFISH_USER_DATA_DIR && !hasExplicitGoofishAccount(accountName)) {
     return process.env.GOOFISH_USER_DATA_DIR;
   }
 
@@ -166,6 +170,7 @@ async function maybeClickQuickEnter(page, options = {}) {
 module.exports = {
   getGoofishUserDataDir,
   normalizeGoofishAccountName,
+  hasExplicitGoofishAccount,
   hasCachedLoginProfile,
   getLoginRequiredMessage,
   getReloginRequiredMessage,
