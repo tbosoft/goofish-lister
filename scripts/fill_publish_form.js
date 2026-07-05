@@ -55,7 +55,7 @@ function composeDescription(title, description, includeTitleInDescription) {
   return `${cleanTitle}\n\n${cleanDescription}`;
 }
 
-const WEB_PUBLISH_CATEGORY_FALLBACK = '其他闲置';
+const WEB_PUBLISH_CATEGORY_FALLBACKS = ['电子资料', '其他闲置'];
 
 (async () => {
   const draftPath = arg('--draft');
@@ -82,7 +82,7 @@ const WEB_PUBLISH_CATEGORY_FALLBACK = '其他闲置';
   const rawDescription = sanitizeGoofishText(originalDescription);
   const price = draft.price;
   const draftCategory = String(draft.category || '').trim();
-  const category = draftCategory || '笔记资料';
+  const category = draftCategory || WEB_PUBLISH_CATEGORY_FALLBACKS[0];
   const images = Array.isArray(draft.images) ? draft.images : [];
 
   if (title !== originalTitle || rawDescription !== originalDescription) {
@@ -616,7 +616,7 @@ const WEB_PUBLISH_CATEGORY_FALLBACK = '其他闲置';
     const matched =
       currentText.includes(categoryName) ||
       currentText.includes(partial) ||
-      (categoryName === WEB_PUBLISH_CATEGORY_FALLBACK && /其他闲置|闲置/.test(currentText));
+      (categoryName === '其他闲置' && /其他闲置|闲置/.test(currentText));
 
     if (!matched) {
       await page.keyboard.press('Escape').catch(() => {});
@@ -653,20 +653,17 @@ const WEB_PUBLISH_CATEGORY_FALLBACK = '其他闲置';
     }
 
     const candidates = [];
-    // "其他闲置" is the broad fallback category that remains publishable for generic second-hand items.
-    candidates.push(WEB_PUBLISH_CATEGORY_FALLBACK);
-    // Prefer a known web-friendly fallback first.
-    candidates.push('笔记资料');
-    // Then try draft category if it differs and is not the common blocked one.
+    // Prefer the supported fallback categories before trying draft-specific values.
+    candidates.push(...WEB_PUBLISH_CATEGORY_FALLBACKS);
+    // Then try draft category if it differs from the fallback categories.
     if (
       draftCategory &&
-      draftCategory !== '电子资料' &&
-      draftCategory !== '笔记资料' &&
-      draftCategory !== WEB_PUBLISH_CATEGORY_FALLBACK
+      !WEB_PUBLISH_CATEGORY_FALLBACKS.includes(draftCategory)
     ) {
       candidates.push(draftCategory);
     }
     // Additional fallbacks.
+    candidates.push('笔记资料');
     candidates.push('二手图书');
     candidates.push('图书');
 
