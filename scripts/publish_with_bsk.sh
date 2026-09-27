@@ -37,16 +37,44 @@ WORK_DIR="outputs/bsk-pipeline-$STAMP"
 mkdir -p "$WORK_DIR"
 
 echo ">> [1/7] start bsk session"
-SESSION_JSON="$(bsk session start --json)"
-SESSION_ID="$(echo "$SESSION_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{console.log(JSON.parse(s).session_id)}catch(e){console.error("bad session json:",s);process.exit(1)}})')"
-if [[ -z "$SESSION_ID" ]]; then
-  echo "Failed to parse session_id" >&2
-  exit 1
+SESSION_FILE="outputs/.bsk-session-id"
+mkdir -p outputs
+SESSION_ID=""
+REUSED=0
+
+parse_session_id() {
+  node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{console.log(JSON.parse(s).session_id)}catch(e){process.exit(1)}})'
+}
+
+# Try to reuse an existing session: alive if a lightweight evaluate succeeds.
+if [[ -f "$SESSION_FILE" ]]; then
+  CAND="$(cat "$SESSION_FILE" 2>/dev/null || true)"
+  if [[ -n "$CAND" ]] && bsk evaluate '1' --session "$CAND" >/dev/null 2>&1; then
+    SESSION_ID="$CAND"
+    REUSED=1
+    echo "   reusing session=$SESSION_ID"
+  else
+    rm -f "$SESSION_FILE"
+  fi
 fi
-echo "   session=$SESSION_ID"
+
+if [[ -z "$SESSION_ID" ]]; then
+  SESSION_ID="$(bsk session start --json | parse_session_id)"
+  if [[ -z "$SESSION_ID" ]]; then
+    echo "Failed to parse session_id" >&2
+    exit 1
+  fi
+  echo "$SESSION_ID" > "$SESSION_FILE"
+  echo "   session=$SESSION_ID (new)"
+fi
 
 cleanup() {
-  bsk session stop "$SESSION_ID" >/dev/null 2>&1 || true
+  # Keep the session alive for reuse; only stop it if this run created it
+  # and the pipeline failed before completion (Set by FINISHED flag).
+  if [[ "${FINISHED:-0}" != "1" && "$REUSED" == "0" ]]; then
+    bsk session stop "$SESSION_ID" >/dev/null 2>&1 || true
+    rm -f "$SESSION_FILE"
+  fi
 }
 trap cleanup EXIT
 
@@ -193,6 +221,7 @@ fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "DRY_RUN: skipping final publish click (would click $PUBLISH_REF)"
+  FINISHED=1
   exit 0
 fi
 
@@ -203,6 +232,7 @@ FINAL_URL="$(bsk evaluate 'location.href' --session "$SESSION_ID" | tr -d '"')"
 echo "FINAL_URL: $FINAL_URL"
 
 if [[ "$FINAL_URL" =~ /item\?id=([0-9]+) ]]; then
+  FINISHED=1
   echo "BSK_PIPELINE_DONE: account=$ACCOUNT itemId=${BASH_REMATCH[1]} url=$FINAL_URL work=$WORK_DIR"
 else
   echo "BSK_PIPELINE_UNCERTAIN: url did not match item page; check browser tab." >&2
